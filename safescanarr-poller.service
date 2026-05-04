@@ -1,0 +1,22 @@
+# /etc/systemd/system/safescanarr-poller.service
+# Polls Sonarr and Radarr APIs every POLL_INTERVAL_SECONDS for new imports.
+
+[Unit]
+Description=Safe Scanarr – Sonarr/Radarr API poller
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/safescanarr
+ExecStart=/opt/safescanarr/venv/bin/python /opt/safescanarr/poller.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

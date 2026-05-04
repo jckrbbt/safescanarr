@@ -1,0 +1,27 @@
+services:
+  safescanarr:
+    image: safescanarr:0.15-beta
+    build: .
+    container_name: safescanarr
+    restart: unless-stopped
+    ports:
+      - "8686:8686"
+    volumes:
+      # Persistent data (db, logs, contact sheets)
+      - ./data:/opt/safescanarr/data
+      # Media folders (read-only — add your paths here)
+      # - /path/to/your/movies:/mnt/media/Movies/HD-Kids:ro
+      # - /path/to/your/tv:/mnt/media/TV/Kids:ro
+    environment:
+      - BASE_DIR=/opt/safescanarr/data
+      - DB_FILE=/opt/safescanarr/data/safescanarr.db
+      - LOG_FILE=/opt/safescanarr/data/safescanarr.log
+      - OUTPUT_DIR=/opt/safescanarr/data/vcs
+      - SONARR_URL=http://172.17.0.1:8989
+      - SONARR_API_KEY=your_sonarr_api_key_here
+      - RADARR_URL=http://172.17.0.1:7878
+      - RADARR_API_KEY=your_radarr_api_key_here
+      - POLL_INTERVAL_SECONDS=600
+      - WEB_PORT=8686
+      # Comma-separated list of watched folders (must match volume mounts above)
+      - WATCH_FOLDERS=/mnt/media/Movies/HD-Kids,/mnt/media/TV/Kids
