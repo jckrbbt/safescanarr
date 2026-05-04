@@ -1,0 +1,16 @@
+# /etc/systemd/system/safescanarr.service
+
+[Unit]
+Description=Safe Scanarr – video contact-sheet generator
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/safescanarr
+ExecStart=/opt/safescanarr/venv/bin/python /opt/safescanarr/scanner.py --scan
+StandardOutput=journal
+StandardError=journal
+
+PrivateTmp=true
+NoNewPrivileges=true

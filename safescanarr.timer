@@ -1,0 +1,12 @@
+# /etc/systemd/system/safescanarr.timer
+# Triggers safescanarr.service every day at midnight.
+
+[Unit]
+Description=Run Safe Scanarr daily at midnight
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
