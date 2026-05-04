@@ -117,9 +117,15 @@ function clearSelection() {
 function updateBulkBar() {
   const bar   = document.getElementById('bulk-actions');
   const count = document.getElementById('selected-count');
+  const total = document.querySelectorAll('.sheet-card').length;
   if (selectedStems.size > 0) {
     bar.style.display = 'flex';
     count.textContent = `${selectedStems.size} selected`;
+    // Show "select all" if not everything is selected
+    const selectAllBtn = document.getElementById('bulk-select-all');
+    if (selectAllBtn) {
+      selectAllBtn.style.display = selectedStems.size < total ? 'inline-flex' : 'none';
+    }
   } else {
     bar.style.display = 'none';
   }
@@ -166,7 +172,7 @@ async function bulkDeleteMedia() {
 }
 
 async function markReviewed(stem) {
-  const res = await fetch(`/api/sheets/${encodeURIComponent(stem)}/reviewed`, {method: 'POST'});
+  const res = await fetch('/api/sheets/reviewed', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stem})});
   if (res.ok) { removeCard(stem); toast('Marked as reviewed ✓'); }
   else toast('Error marking reviewed', true);
 }
@@ -181,7 +187,7 @@ function confirmDeleteMedia(stem) {
 
 async function deleteMedia(stem) {
   closeModal();
-  const res  = await fetch(`/api/sheets/${encodeURIComponent(stem)}/delete-media`, {method: 'POST'});
+  const res  = await fetch('/api/sheets/delete-media', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stem})});
   const data = await res.json();
   if (res.ok) { removeCard(stem); toast('Media deleted ✓'); }
   else toast('Error: ' + (data.message || 'unknown'), true);

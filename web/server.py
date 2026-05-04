@@ -76,8 +76,9 @@ def api_sheet_image(filename):
     return send_from_directory(cfg.OUTPUT_DIR, filename)
 
 
-@app.route("/api/sheets/<stem>/reviewed", methods=["POST"])
-def api_sheet_reviewed(stem):
+@app.route("/api/sheets/reviewed", methods=["POST"])
+def api_sheet_reviewed():
+    stem  = (request.get_json() or {}).get("stem", "")
     cfg   = Config()
     sheet = Path(cfg.OUTPUT_DIR) / (stem + ".jpg")
     if sheet.exists():
@@ -86,8 +87,9 @@ def api_sheet_reviewed(stem):
     return jsonify({"status": "not_found"}), 404
 
 
-@app.route("/api/sheets/<stem>/delete-media", methods=["POST"])
-def api_sheet_delete_media(stem):
+@app.route("/api/sheets/delete-media", methods=["POST"])
+def api_sheet_delete_media():
+    stem  = (request.get_json() or {}).get("stem", "")
     cfg   = Config()
     db    = get_db()
     match = db.find_file_by_stem(stem)
