@@ -62,27 +62,33 @@ function renderSheets(sheets) {
   }
   empty.style.display = 'none';
 
-  sheets.forEach(sheet => {
+  sheets.forEach((sheet, idx) => {
+    // Store stem in a global map keyed by index to avoid apostrophe issues in onclick
+    window._sheetStems = window._sheetStems || {};
+    window._sheetStems[idx] = sheet.stem;
+
     const card = document.createElement('div');
     card.className = 'sheet-card' + (selectedStems.has(sheet.stem) ? ' selected' : '');
-    card.id = `card-${sheet.stem}`;
+    card.id = `card-${idx}`;
+    card.dataset.stem = sheet.stem;
 
     const srcPath = sheet.source_path || 'Unknown source';
+    const checked  = selectedStems.has(sheet.stem) ? 'checked' : '';
+
     card.innerHTML = `
       <div class="sheet-select">
-        <input type="checkbox" class="sheet-checkbox" data-stem="${sheet.stem}"
-               ${selectedStems.has(sheet.stem) ? 'checked' : ''}
-               onchange="toggleSelect('${sheet.stem}', this.checked)">
+        <input type="checkbox" class="sheet-checkbox" data-idx="${idx}" ${checked}
+               onchange="toggleSelectByIdx(${idx}, this.checked)">
       </div>
       <img class="sheet-img"
            src="/api/sheets/image/${encodeURIComponent(sheet.filename)}"
-           alt="${sheet.stem}" onclick="openLightbox(this.src)" loading="lazy">
+           alt="" onclick="openLightbox(this.src)" loading="lazy">
       <div class="sheet-info">
         <div class="sheet-name" title="${sheet.stem}">${sheet.stem}</div>
         <div class="sheet-path" title="${srcPath}">${srcPath}</div>
         <div class="sheet-actions">
-          <button class="btn btn-success btn-sm" onclick="markReviewed('${sheet.stem}')">✓ Reviewed</button>
-          <button class="btn btn-danger btn-sm" onclick="confirmDeleteMedia('${sheet.stem}')">🗑 Delete Media</button>
+          <button class="btn btn-success btn-sm" onclick="markReviewedByIdx(${idx})">✓ Reviewed</button>
+          <button class="btn btn-danger btn-sm" onclick="confirmDeleteByIdx(${idx})">🗑 Delete Media</button>
         </div>
       </div>`;
     grid.appendChild(card);
@@ -92,7 +98,7 @@ function renderSheets(sheets) {
 function toggleSelect(stem, checked) {
   if (checked) selectedStems.add(stem);
   else         selectedStems.delete(stem);
-  const card = document.getElementById(`card-${stem}`);
+  const card = document.querySelector(`.sheet-card[data-stem="${CSS.escape(stem)}"]`);
   if (card) card.classList.toggle('selected', checked);
   updateBulkBar();
 }
@@ -173,8 +179,21 @@ async function bulkDeleteMedia() {
 
 async function markReviewed(stem) {
   const res = await fetch('/api/sheets/reviewed', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stem})});
-  if (res.ok) { removeCard(stem); toast('Marked as reviewed ✓'); }
+  if (res.ok) { removeCardByStem(stem); toast('Marked as reviewed ✓'); }
   else toast('Error marking reviewed', true);
+}
+
+function markReviewedByIdx(idx) {
+  markReviewed(window._sheetStems[idx]);
+}
+
+function confirmDeleteByIdx(idx) {
+  const stem = window._sheetStems[idx];
+  showModal(
+    'Delete Media?',
+    `This will permanently delete the source video for "${stem}" and tell Sonarr/Radarr to find an alternative. This cannot be undone.`,
+    () => deleteMedia(stem)
+  );
 }
 
 function confirmDeleteMedia(stem) {
@@ -185,19 +204,23 @@ function confirmDeleteMedia(stem) {
   );
 }
 
+function toggleSelectByIdx(idx, checked) {
+  toggleSelect(window._sheetStems[idx], checked);
+}
+
 async function deleteMedia(stem) {
   closeModal();
   const res  = await fetch('/api/sheets/delete-media', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stem})});
   const data = await res.json();
-  if (res.ok) { removeCard(stem); toast('Media deleted ✓'); }
+  if (res.ok) { removeCardByStem(stem); toast('Media deleted ✓'); }
   else toast('Error: ' + (data.message || 'unknown'), true);
 }
 
-function removeCard(stem) {
-  // Remove from allSheets array
+function removeCardByStem(stem) {
   allSheets = allSheets.filter(s => s.stem !== stem);
   selectedStems.delete(stem);
-  const card = document.getElementById(`card-${stem}`);
+  // Find card by data-stem attribute
+  const card = document.querySelector(`.sheet-card[data-stem="${CSS.escape(stem)}"]`);
   if (card) {
     card.style.transition = 'opacity .3s';
     card.style.opacity = '0';
@@ -210,6 +233,9 @@ function removeCard(stem) {
   }
   updateBulkBar();
 }
+
+// Keep old name as alias for bulk actions
+function removeCard(stem) { removeCardByStem(stem); }
 
 async function triggerScan() {
   await fetch('/api/scan', {method: 'POST'});
