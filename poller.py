@@ -69,8 +69,7 @@ def poll_sonarr(db: Database) -> None:
 
     for record in records:
         record_id    = record.get("id", 0)
-        episode_file = record.get("episodeFile") or {}
-        file_path    = episode_file.get("path") or record.get("sourceTitle", "")
+        file_path = (record.get("data") or {}).get("importedPath", "")
 
         if not file_path:
             continue
@@ -113,8 +112,7 @@ def poll_radarr(db: Database) -> None:
 
     for record in records:
         record_id  = record.get("id", 0)
-        movie_file = record.get("movieFile") or {}
-        file_path  = movie_file.get("path") or record.get("sourceTitle", "")
+        file_path = (record.get("data") or {}).get("importedPath", "")
 
         if not file_path:
             continue
