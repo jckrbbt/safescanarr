@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 
 sys.path.insert(0, "/opt/safescanarr")
@@ -29,15 +30,19 @@ def run_poller():
 
     log.info("Poller thread started")
     while True:
-        cfg = Config()
-        db  = Database(cfg.DB_FILE)
         try:
+            cfg = Config()
+            db  = Database(cfg.DB_FILE)
+            log.info("Poller cycle — sonarr_key_set:%s radarr_key_set:%s interval:%ds",
+                     bool(cfg.SONARR_API_KEY), bool(cfg.RADARR_API_KEY),
+                     cfg.POLL_INTERVAL_SECONDS)
             poll_sonarr(db)
             poll_radarr(db)
+            log.info("Poller cycle complete — sleeping %ds", cfg.POLL_INTERVAL_SECONDS)
+            time.sleep(cfg.POLL_INTERVAL_SECONDS)
         except Exception as e:
-            log.error("Poller error: %s", e)
-        # Re-read interval each cycle so UI changes take effect
-        time.sleep(Config().POLL_INTERVAL_SECONDS)
+            log.error("Poller error: %s\n%s", e, traceback.format_exc())
+            time.sleep(30)
 
 
 def run_midnight_scheduler():
