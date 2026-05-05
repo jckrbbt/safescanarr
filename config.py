@@ -13,7 +13,7 @@ import json
 import os
 
 _DEFAULTS = {
-    "watch_folders":          ["/mnt/media/Movies/HD-Kids", "/mnt/media/TV/Kids"],
+    "watch_folders":          [],
     "output_dir":             "/opt/safescanarr/data/vcs",
     "sonarr_url":             "http://localhost:8989",
     "sonarr_api_key":         "",

@@ -1,6 +1,6 @@
-# 🛡️ Safe Scanarr `v0.1-beta`
+# 🛡️ Safe Scanarr
 
-Monitors your Kids media folders for new or changed video files, generates
+Monitors your media folders for new or changed video files, generates
 **video contact sheets** for review, and lets you approve or delete media
 from a clean web UI.
 
@@ -36,11 +36,6 @@ Edit `docker-compose.yml` environment variables:
 |---|---|---|
 | `WATCH_FOLDERS` | see compose | Comma-separated folders to monitor |
 | `OUTPUT_DIR` | `./data/vcs` | Where contact sheets are saved |
-| `SONARR_URL` | `http://172.17.0.1:8989` | Sonarr URL (host from Docker) |
-| `SONARR_API_KEY` | — | Sonarr API key |
-| `RADARR_URL` | `http://172.17.0.1:7878` | Radarr URL |
-| `RADARR_API_KEY` | — | Radarr API key |
-| `POLL_INTERVAL_SECONDS` | `600` | How often to poll Sonarr/Radarr |
 | `WEB_PORT` | `8686` | Web UI port |
 
 Settings can also be changed live from the **Config** page in the UI.
