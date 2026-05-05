@@ -317,9 +317,40 @@ async function loadConfig() {
   document.getElementById('cfg-scan-schedule-enabled').checked = !!cfg.scan_schedule_enabled;
   document.getElementById('cfg-scan-schedule').value            = cfg.scan_schedule || 'daily';
   document.getElementById('cfg-nudenet-threshold').value  = cfg.nudenet_threshold ?? 0.6;
+  document.getElementById('cfg-nudenet-threshold').addEventListener('input', updateThresholdHint);
+  updateThresholdHint();
+  checkArrKeys();
   document.getElementById('cfg-poll-interval').value  = cfg.poll_interval_seconds || 600;
   document.getElementById('cfg-vcs-grid').value       = cfg.vcs_grid      || '4x4';
   document.getElementById('cfg-vcsi-timeout').value   = cfg.vcsi_timeout_seconds || 300;
+}
+
+function updateThresholdHint() {
+  const val  = parseFloat(document.getElementById('cfg-nudenet-threshold').value) || 0.6;
+  const hint = document.getElementById('threshold-hint');
+  if (!hint) return;
+  if (val <= 0.4)      hint.textContent = 'Very sensitive — may flag innocent content';
+  else if (val <= 0.55) hint.textContent = 'Sensitive — catches more, some false positives possible';
+  else if (val <= 0.65) hint.textContent = 'Balanced (recommended)';
+  else if (val <= 0.75) hint.textContent = 'Conservative — fewer false positives';
+  else                  hint.textContent = 'Very conservative — only flags high-confidence detections';
+}
+
+function checkArrKeys() {
+  const sonarrKey  = document.getElementById('cfg-sonarr-key').value.trim();
+  const radarrKey  = document.getElementById('cfg-radarr-key').value.trim();
+  const hasKeys    = sonarrKey.length > 0 || radarrKey.length > 0;
+  const toggle     = document.getElementById('cfg-polling-enabled');
+  const noKeyHint  = document.getElementById('polling-no-keys-hint');
+
+  if (!hasKeys) {
+    toggle.disabled    = true;
+    toggle.checked     = false;
+    noKeyHint.style.display = 'block';
+  } else {
+    toggle.disabled    = false;
+    noKeyHint.style.display = 'none';
+  }
 }
 
 async function saveConfig() {

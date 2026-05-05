@@ -79,84 +79,50 @@
       <div id="config-msg" class="msg" style="display:none"></div>
       <div class="config-form">
 
-        <!-- Scan Mode — at the top -->
+        <!-- Scan Mode -->
         <section class="config-section">
           <h2>🔍 Scan Mode</h2>
-          <p class="hint">Controls how Safe Scanarr handles new media. In <strong>Review Mode</strong>, all contact sheets are queued for manual review — flagged content is highlighted at the top for priority review. In <strong>Safe Mode</strong>, flagged content is automatically deleted and blacklisted in Sonarr/Radarr without manual review; the contact sheet is retained in the Auto-handled tab for auditing.</p>
+          <p class="hint">Choose how Safe Scanarr responds when NSFW content is detected in a contact sheet.</p>
           <div class="mode-toggle">
             <label class="mode-option">
               <input type="radio" name="scan-mode" value="review" id="mode-review">
               <span class="mode-label">
                 <strong>Review Mode</strong>
-                <small>All media queued for manual review. Flagged content highlighted for priority review.</small>
+                <small>Every contact sheet is queued for your manual review. Anything flagged as NSFW is sorted to the top and highlighted so you can deal with it first.</small>
               </span>
             </label>
             <label class="mode-option">
               <input type="radio" name="scan-mode" value="safe" id="mode-safe">
               <span class="mode-label">
                 <strong>Safe Mode</strong>
-                <small>Flagged content auto-deleted and blacklisted. Clean media queued for review.</small>
+                <small>Flagged content is automatically deleted and blocked from being re-downloaded. The contact sheet is saved in the Auto-handled tab so you can audit what was removed.</small>
               </span>
             </label>
           </div>
         </section>
 
+        <!-- NSFW Detection -->
         <section class="config-section">
           <h2>🔞 NSFW Detection</h2>
-          <p class="hint">NudeNet runs locally (no API calls) on every contact sheet. In <strong>Review Mode</strong>, flagged items appear at the top of the queue with a warning badge for manual review. In <strong>Safe Mode</strong>, flagged items are automatically deleted and blacklisted. Threshold controls sensitivity — lower values catch more but may produce false positives.</p>
-          <label>Confidence Threshold (0.1–1.0)</label>
-          <input type="number" id="cfg-nudenet-threshold" class="input-short" min="0.1" max="1.0" step="0.05">
-          <p class="hint" style="margin-top:6px">0.5 = more sensitive, 0.7 = fewer false positives. Default: 0.6</p>
+          <p class="hint">Every contact sheet is automatically scanned for explicit content using NudeNet, which runs entirely on your server — no data is sent anywhere. The confidence threshold controls how certain the detection needs to be before flagging something. A lower threshold catches more content but may occasionally flag innocent material; a higher threshold is more conservative.</p>
+          <label>Detection Threshold</label>
+          <div class="threshold-row">
+            <input type="number" id="cfg-nudenet-threshold" class="input-short" min="0.1" max="1.0" step="0.05">
+            <span class="threshold-hint" id="threshold-hint"></span>
+          </div>
         </section>
 
+        <!-- Watch Folders -->
         <section class="config-section">
           <h2>Watch Folders</h2>
           <p class="hint">One folder per line. Only media in these folders will be scanned and processed.</p>
           <textarea id="cfg-watch-folders" rows="4" class="input-full"></textarea>
         </section>
 
-        <section class="config-section">
-          <h2>Sonarr</h2>
-          <label>URL</label>
-          <input type="text" id="cfg-sonarr-url" class="input-full" placeholder="http://localhost:8989">
-          <label>API Key</label>
-          <div class="input-row">
-            <input type="text" id="cfg-sonarr-key" class="input-full">
-            <button class="btn btn-secondary" onclick="testConnection('sonarr')" id="test-sonarr-btn">Test</button>
-          </div>
-          <div id="test-sonarr-result" class="test-result"></div>
-        </section>
-
-        <section class="config-section">
-          <h2>Radarr</h2>
-          <label>URL</label>
-          <input type="text" id="cfg-radarr-url" class="input-full" placeholder="http://localhost:7878">
-          <label>API Key</label>
-          <div class="input-row">
-            <input type="text" id="cfg-radarr-key" class="input-full">
-            <button class="btn btn-secondary" onclick="testConnection('radarr')" id="test-radarr-btn">Test</button>
-          </div>
-          <div id="test-radarr-result" class="test-result"></div>
-        </section>
-
-        <section class="config-section">
-          <h2>Poller</h2>
-          <p class="hint">The poller periodically checks Sonarr and Radarr for newly imported files and triggers contact sheet generation automatically — without waiting for the nightly scan. Requires Sonarr/Radarr API keys to be configured.</p>
-          <div class="toggle-row">
-            <label class="toggle-label">Enable polling</label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="cfg-polling-enabled">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <label style="margin-top:12px">Poll Interval (seconds)</label>
-          <input type="number" id="cfg-poll-interval" class="input-short" min="60">
-
-        </section>
-
+        <!-- Full Scan Schedule -->
         <section class="config-section">
           <h2>Full Scan Schedule</h2>
-          <p class="hint">Periodically scans all watch folders for new or changed files, independent of polling. Useful as a safety net to catch anything the poller may have missed.</p>
+          <p class="hint">Automatically scans all watch folders on a schedule, catching anything that may have been missed. Runs independently of polling.</p>
           <div class="toggle-row">
             <label class="toggle-label">Enable scheduled scans</label>
             <label class="toggle-switch">
@@ -166,13 +132,67 @@
           </div>
           <label style="margin-top:12px">Frequency</label>
           <select id="cfg-scan-schedule" class="select">
-            <option value="daily">1x daily (midnight)</option>
-            <option value="twice">2x daily (midnight, noon)</option>
-            <option value="quad">4x daily (midnight, 6AM, noon, 6PM)</option>
+            <option value="daily">Once daily (midnight)</option>
+            <option value="twice">Twice daily (midnight and noon)</option>
+            <option value="quad">Four times daily (midnight, 6 AM, noon, 6 PM)</option>
             <option value="hourly">Hourly</option>
           </select>
         </section>
 
+        <!-- Arr Integration -->
+        <section class="config-section">
+          <h2>Arr Integration</h2>
+          <p class="hint">Connect Sonarr and Radarr so Safe Scanarr can detect new imports in near real-time and remove media from their libraries when needed. At least one API key must be set to enable polling.</p>
+
+          <div class="arr-subsection">
+            <h3>Poller</h3>
+            <p class="hint">When enabled, Safe Scanarr checks Sonarr and Radarr for newly imported files at the interval below, rather than waiting for a scheduled scan.</p>
+            <div class="toggle-row">
+              <label class="toggle-label" id="polling-toggle-label">Enable polling</label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="cfg-polling-enabled">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div id="polling-no-keys-hint" class="hint" style="color:var(--warn);display:none">
+              ⚠ Set at least one API key below to enable polling.
+            </div>
+            <label style="margin-top:12px">Check every (seconds)</label>
+            <input type="number" id="cfg-poll-interval" class="input-short" min="60">
+          </div>
+
+          <div class="arr-divider"></div>
+
+          <div class="arr-subsection">
+            <h3>Sonarr</h3>
+            <label>URL</label>
+            <input type="text" id="cfg-sonarr-url" class="input-full" placeholder="http://localhost:8989"
+                   oninput="checkArrKeys()">
+            <label>API Key</label>
+            <div class="input-row">
+              <input type="text" id="cfg-sonarr-key" class="input-full" oninput="checkArrKeys()">
+              <button class="btn btn-secondary" onclick="testConnection('sonarr')" id="test-sonarr-btn">Test</button>
+            </div>
+            <div id="test-sonarr-result" class="test-result"></div>
+          </div>
+
+          <div class="arr-divider"></div>
+
+          <div class="arr-subsection">
+            <h3>Radarr</h3>
+            <label>URL</label>
+            <input type="text" id="cfg-radarr-url" class="input-full" placeholder="http://localhost:7878"
+                   oninput="checkArrKeys()">
+            <label>API Key</label>
+            <div class="input-row">
+              <input type="text" id="cfg-radarr-key" class="input-full" oninput="checkArrKeys()">
+              <button class="btn btn-secondary" onclick="testConnection('radarr')" id="test-radarr-btn">Test</button>
+            </div>
+            <div id="test-radarr-result" class="test-result"></div>
+          </div>
+        </section>
+
+        <!-- vcsi -->
         <section class="config-section">
           <h2>vcsi</h2>
           <p class="hint">vcsi generates the contact sheet thumbnails from your video files. Grid size controls how many thumbnails appear (e.g. 4x4 = 16 frames). Timeout is the maximum time allowed per file — increase this for large or slow-to-process files.</p>
@@ -182,6 +202,7 @@
           <input type="number" id="cfg-vcsi-timeout" class="input-short" min="30">
         </section>
 
+        <!-- Database -->
         <section class="config-section">
           <h2>Database</h2>
           <p class="hint">Clean Database removes records for files that no longer exist on disk or are outside your current watch folders. Useful after moving or deleting media, or after changing watch folders.</p>
