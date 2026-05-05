@@ -514,7 +514,7 @@ textarea.input-full { resize: vertical; }
   transition: border-color .15s;
 }
 
-.mode-label small {
+.mode-label .mode-desc {
   display: block;
   font-size: 12px;
   color: var(--text-dim);
@@ -538,7 +538,7 @@ textarea.input-full { resize: vertical; }
   gap: 3px;
 }
 
-.mode-label strong { font-size: 14px; }
+.mode-title { font-size: 14px; }
 .mode-label small  { font-size: 12px; color: var(--text-dim); }
 
 /* ── Toggle switch ────────────────────────────────────────────── */
@@ -652,9 +652,7 @@ textarea.input-full { resize: vertical; }
 }
 
 /* ── Mode boxes equal size fix ────────────────────────────────── */
-.mode-toggle { align-items: stretch; }
-.mode-option { align-items: flex-start; }
-.mode-label  { width: 100%; }
+.mode-label { width: 100%; }
 
 /* ── Arr integration subsections ─────────────────────────────── */
 .arr-subsection { padding: 4px 0; }
