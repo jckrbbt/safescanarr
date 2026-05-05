@@ -17,28 +17,43 @@ from a clean web UI.
 ## Quick Start (Docker)
 
 ```bash
-git clone https://github.com/YOURUSERNAME/safescanarr.git
+git clone https://github.com/jckrbbt/safescanarr.git
 cd safescanarr
 
-# Edit docker-compose.yml — update volume paths and API keys
+# Edit docker-compose.yml — mount your media folders
 docker compose up -d --build
 ```
 
-Open **http://yourserver:8686**
+Open **http://yourserver:8686** and configure everything from the **Config** page.
 
 ---
 
 ## Configuration
 
-Edit `docker-compose.yml` environment variables:
+Only two environment variables are needed in `docker-compose.yml`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `WATCH_FOLDERS` | see compose | Comma-separated folders to monitor |
-| `OUTPUT_DIR` | `./data/vcs` | Where contact sheets are saved |
+| `BASE_DIR` | `/opt/safescanarr/data` | Where config, db, and logs are stored |
 | `WEB_PORT` | `8686` | Web UI port |
 
-Settings can also be changed live from the **Config** page in the UI.
+Everything else — Sonarr/Radarr URLs, API keys, watch folders, poll interval,
+vcsi settings — is configured from the **Config** page in the UI and saved to
+`./data/config.json`.
+
+---
+
+## docker-compose.yml volumes
+
+Mount your media folders so the container can read (and optionally delete) them:
+
+```yaml
+volumes:
+  - ./data:/opt/safescanarr/data
+  - /your/media/path:/mnt/media
+```
+
+Remove `:ro` if you want the Delete Media feature to work.
 
 ---
 
@@ -56,8 +71,6 @@ docker compose up -d --build
 ```bash
 sudo bash install.sh
 ```
-
-See `install.sh` for details.
 
 ---
 
