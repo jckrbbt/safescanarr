@@ -82,20 +82,20 @@
         <!-- Scan Mode — at the top -->
         <section class="config-section">
           <h2>🔍 Scan Mode</h2>
-          <p class="hint">Controls how Safe Scanarr handles new media. In <strong>Review Mode</strong>, all contact sheets are queued for manual review — flagged content (once NSFW detection is enabled) is highlighted at the top. In <strong>Safe Mode</strong>, flagged content is automatically deleted and blacklisted in Sonarr/Radarr without manual review; the contact sheet is retained in the Auto-handled tab for auditing.</p>
+          <p class="hint">Controls how Safe Scanarr handles new media. In <strong>Review Mode</strong>, all contact sheets are queued for manual review — flagged content is highlighted at the top for priority review. In <strong>Safe Mode</strong>, flagged content is automatically deleted and blacklisted in Sonarr/Radarr without manual review; the contact sheet is retained in the Auto-handled tab for auditing.</p>
           <div class="mode-toggle">
             <label class="mode-option">
               <input type="radio" name="scan-mode" value="review" id="mode-review">
               <span class="mode-label">
                 <strong>Review Mode</strong>
-                <small>All media queued for manual review</small>
+                <small>All media queued for manual review. Flagged content highlighted for priority review.</small>
               </span>
             </label>
             <label class="mode-option">
               <input type="radio" name="scan-mode" value="safe" id="mode-safe">
               <span class="mode-label">
                 <strong>Safe Mode</strong>
-                <small>Flagged content auto-deleted, clean media queued for review</small>
+                <small>Flagged content auto-deleted and blacklisted. Clean media queued for review.</small>
               </span>
             </label>
           </div>
@@ -151,6 +151,14 @@
           </div>
           <label style="margin-top:12px">Poll Interval (seconds)</label>
           <input type="number" id="cfg-poll-interval" class="input-short" min="60">
+          <label style="margin-top:16px">Full Scan Schedule</label>
+          <p class="hint">How often to run a full scan of all watch folders, independent of polling.</p>
+          <select id="cfg-scan-schedule" class="select">
+            <option value="daily">1x daily (midnight)</option>
+            <option value="twice">2x daily (midnight, noon)</option>
+            <option value="quad">4x daily (midnight, 6AM, noon, 6PM)</option>
+            <option value="hourly">Hourly</option>
+          </select>
         </section>
 
         <section class="config-section">

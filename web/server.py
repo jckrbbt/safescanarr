@@ -232,6 +232,7 @@ def api_config_save():
         existing["polling_enabled"]       = bool(existing.get("polling_enabled", False))
         existing["scan_mode"]             = existing.get("scan_mode", "review")
         existing["nudenet_threshold"]     = float(existing.get("nudenet_threshold", 0.6))
+        existing["scan_schedule"]         = existing.get("scan_schedule", "daily")
         if isinstance(existing["watch_folders"], str):
             existing["watch_folders"] = [
                 p.strip() for p in existing["watch_folders"].split(",") if p.strip()
@@ -321,11 +322,16 @@ def api_db_requeue():
     if not path:
         return jsonify({"status": "error", "message": "No path provided"}), 400
 
-    if not Path(path).exists():
-        return jsonify({"status": "error", "message": "Source file no longer exists"}), 404
-
+    file_exists = Path(path).exists()
     cfg = Config()
     db  = get_db()
+
+    if not file_exists:
+        log.warning("Re-queue: source file not found: %s", path)
+        return jsonify({
+            "status": "error",
+            "message": f"Source file no longer exists: {path}"
+        }), 404
 
     # Remove from DB so scanner treats it as new
     db.delete_file(path)

@@ -45,24 +45,45 @@ def run_poller():
             time.sleep(30)
 
 
+# Scan hours for each schedule option
+SCHEDULE_HOURS = {
+    "daily":  [0],
+    "twice":  [0, 12],
+    "quad":   [0, 6, 12, 18],
+    "hourly": list(range(24)),
+}
+
+
 def run_midnight_scheduler():
-    log.info("Midnight scheduler thread started")
+    log.info("Scan scheduler thread started")
+    last_run_hour = -1
     while True:
-        now = datetime.now()
-        seconds_until_midnight = (
-            (24 - now.hour - 1) * 3600
-            + (60 - now.minute - 1) * 60
-            + (60 - now.second)
-        )
-        log.info("Next full scan in %.0f minutes", seconds_until_midnight / 60)
-        time.sleep(seconds_until_midnight)
-        log.info("=== Midnight scan triggered ===")
         try:
-            import subprocess
-            subprocess.run([sys.executable, SCANNER, "--scan"], check=False)
+            cfg      = Config()
+            schedule = cfg.SCAN_SCHEDULE
+            hours    = SCHEDULE_HOURS.get(schedule, [0])
+            now      = datetime.now()
+
+            if now.hour in hours and now.hour != last_run_hour:
+                last_run_hour = now.hour
+                log.info("=== Scheduled scan triggered (schedule=%s, hour=%d) ===",
+                         schedule, now.hour)
+                import subprocess
+                subprocess.run([sys.executable, SCANNER, "--scan"], check=False)
+
+            # Find next scheduled hour for logging
+            future = [h for h in hours if h > now.hour]
+            next_h = future[0] if future else hours[0]
+            if next_h <= now.hour:
+                mins_to_next = (24 - now.hour + next_h) * 60 - now.minute
+            else:
+                mins_to_next = (next_h - now.hour) * 60 - now.minute
+            log.debug("Next scheduled scan in ~%d minutes (hour %d)", mins_to_next, next_h)
+
         except Exception as e:
-            log.error("Midnight scan error: %s", e)
-        time.sleep(61)
+            log.error("Scheduler error: %s", e)
+
+        time.sleep(60)  # check every minute
 
 
 def run_web():

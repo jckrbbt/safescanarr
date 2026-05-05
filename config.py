@@ -22,6 +22,7 @@ _DEFAULTS = {
     "poll_interval_seconds":  600,
     "scan_mode":              "review",   # "review" or "safe"
     "nudenet_threshold":      0.6,
+    "scan_schedule":          "daily",   # daily, twice, quad, hourly
     "vcs_grid":               "4x4",
     "vcsi_timeout_seconds":   300,
 }
@@ -69,6 +70,7 @@ def _load() -> dict:
         "poll_interval_seconds": int(os.environ.get("POLL_INTERVAL_SECONDS", _DEFAULTS["poll_interval_seconds"])),
         "scan_mode":             "review",
         "nudenet_threshold":     0.6,
+        "scan_schedule":         "daily",
         "vcs_grid":              os.environ.get("VCS_GRID",              _DEFAULTS["vcs_grid"]),
         "vcsi_timeout_seconds":  int(os.environ.get("VCSI_TIMEOUT_SECONDS", _DEFAULTS["vcsi_timeout_seconds"])),
     }
@@ -109,6 +111,7 @@ class Config:
         self.POLL_INTERVAL_SECONDS = cfg["poll_interval_seconds"]
         self.SCAN_MODE             = cfg.get("scan_mode", "review")
         self.NUDENET_THRESHOLD     = float(cfg.get("nudenet_threshold", 0.6))
+        self.SCAN_SCHEDULE         = cfg.get("scan_schedule", "daily")
         self.VCS_GRID              = cfg["vcs_grid"]
         self.VCSI_TIMEOUT_SECONDS  = cfg["vcsi_timeout_seconds"]
         self.BASE_DIR              = _base_dir()

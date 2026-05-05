@@ -314,6 +314,7 @@ async function loadConfig() {
   document.getElementById('cfg-radarr-url').value     = cfg.radarr_url    || '';
   document.getElementById('cfg-radarr-key').value     = cfg.radarr_api_key || '';
   document.getElementById('cfg-polling-enabled').checked   = !!cfg.polling_enabled;
+  document.getElementById('cfg-scan-schedule').value       = cfg.scan_schedule || 'daily';
   document.getElementById('cfg-nudenet-threshold').value  = cfg.nudenet_threshold ?? 0.6;
   document.getElementById('cfg-poll-interval').value  = cfg.poll_interval_seconds || 600;
   document.getElementById('cfg-vcs-grid').value       = cfg.vcs_grid      || '4x4';
@@ -335,6 +336,7 @@ async function saveConfig() {
     polling_enabled:       document.getElementById('cfg-polling-enabled').checked,
     nudenet_threshold:     parseFloat(document.getElementById('cfg-nudenet-threshold').value),
     poll_interval_seconds: parseInt(document.getElementById('cfg-poll-interval').value),
+    scan_schedule:         document.getElementById('cfg-scan-schedule').value,
     vcs_grid:              document.getElementById('cfg-vcs-grid').value.trim(),
     vcsi_timeout_seconds:  parseInt(document.getElementById('cfg-vcsi-timeout').value),
   };
@@ -417,17 +419,22 @@ async function loadDb() {
     const tr  = document.createElement('tr');
     const cls = row.status === 'ok' ? 'status-ok' : 'status-error';
     const ts  = new Date(row.updated_at).toLocaleString();
-    // Escape path for use in onclick
-    const escapedPath = row.path.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const flagCell = row.flagged
-      ? `<span class="flag-badge">⚠ NSFW</span>`
-      : '';
+    const flagCell = row.flagged ? `<span class="flag-badge">⚠ NSFW</span>` : '';
+
+    // Use data attribute for path to avoid any escaping issues
+    const btn = document.createElement('button');
+    btn.className   = 'btn btn-secondary btn-sm';
+    btn.textContent = '↻ Re-queue';
+    btn.dataset.path = row.path;
+    btn.addEventListener('click', () => requeueFile(btn.dataset.path));
+
     tr.innerHTML = `
       <td><span class="${cls}">${row.status.toUpperCase()}</span>${flagCell}</td>
       <td>${row.name}</td>
       <td class="path-cell" title="${row.path}">${row.path}</td>
       <td>${ts}</td>
-      <td><button class="btn btn-secondary btn-sm" onclick="requeueFile('${escapedPath}')">↻ Re-queue</button></td>`;
+      <td></td>`;
+    tr.querySelector('td:last-child').appendChild(btn);
     tbody.appendChild(tr);
   });
 

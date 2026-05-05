@@ -502,6 +502,7 @@ textarea.input-full { resize: vertical; }
 
 .mode-option {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -511,6 +512,13 @@ textarea.input-full { resize: vertical; }
   padding: 14px 16px;
   cursor: pointer;
   transition: border-color .15s;
+}
+
+.mode-label small {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
 }
 
 .mode-option:has(input:checked) {
