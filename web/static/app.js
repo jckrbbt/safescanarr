@@ -317,6 +317,7 @@ async function loadConfig() {
   document.getElementById('cfg-scan-schedule-enabled').checked = !!cfg.scan_schedule_enabled;
   document.getElementById('cfg-scan-schedule').value            = cfg.scan_schedule || 'daily';
   document.getElementById('cfg-nudenet-threshold').value  = cfg.nudenet_threshold ?? 0.6;
+  document.getElementById('cfg-nudenet-frames').value      = cfg.nudenet_frames ?? 10;
   document.getElementById('cfg-nudenet-threshold').addEventListener('input', updateThresholdHint);
   updateThresholdHint();
   checkArrKeys();
@@ -367,6 +368,7 @@ async function saveConfig() {
     radarr_api_key:        document.getElementById('cfg-radarr-key').value.trim(),
     polling_enabled:       document.getElementById('cfg-polling-enabled').checked,
     nudenet_threshold:     parseFloat(document.getElementById('cfg-nudenet-threshold').value),
+    nudenet_frames:        parseInt(document.getElementById('cfg-nudenet-frames').value),
     poll_interval_seconds: parseInt(document.getElementById('cfg-poll-interval').value),
     scan_schedule_enabled: document.getElementById('cfg-scan-schedule-enabled').checked,
     scan_schedule:         document.getElementById('cfg-scan-schedule').value,

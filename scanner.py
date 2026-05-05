@@ -236,7 +236,7 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
             return
 
         sheet_path    = output_dir / (video.stem + ".jpg")
-        nudenet_result = analyse_sheet(sheet_path, cfg)
+        nudenet_result = analyse_video_file(video, cfg)
         flagged       = nudenet_result["flagged"]
         flag_reason   = (
             ", ".join(h["label"] for h in nudenet_result["labels"])
