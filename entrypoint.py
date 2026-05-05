@@ -60,6 +60,9 @@ def run_midnight_scheduler():
     while True:
         try:
             cfg      = Config()
+            if not cfg.SCAN_SCHEDULE_ENABLED:
+                time.sleep(60)
+                continue
             schedule = cfg.SCAN_SCHEDULE
             hours    = SCHEDULE_HOURS.get(schedule, [0])
             now      = datetime.now()

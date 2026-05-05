@@ -151,8 +151,20 @@
           </div>
           <label style="margin-top:12px">Poll Interval (seconds)</label>
           <input type="number" id="cfg-poll-interval" class="input-short" min="60">
-          <label style="margin-top:16px">Full Scan Schedule</label>
-          <p class="hint">How often to run a full scan of all watch folders, independent of polling.</p>
+
+        </section>
+
+        <section class="config-section">
+          <h2>Full Scan Schedule</h2>
+          <p class="hint">Periodically scans all watch folders for new or changed files, independent of polling. Useful as a safety net to catch anything the poller may have missed.</p>
+          <div class="toggle-row">
+            <label class="toggle-label">Enable scheduled scans</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="cfg-scan-schedule-enabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <label style="margin-top:12px">Frequency</label>
           <select id="cfg-scan-schedule" class="select">
             <option value="daily">1x daily (midnight)</option>
             <option value="twice">2x daily (midnight, noon)</option>

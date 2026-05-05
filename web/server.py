@@ -232,6 +232,7 @@ def api_config_save():
         existing["polling_enabled"]       = bool(existing.get("polling_enabled", False))
         existing["scan_mode"]             = existing.get("scan_mode", "review")
         existing["nudenet_threshold"]     = float(existing.get("nudenet_threshold", 0.6))
+        existing["scan_schedule_enabled"] = bool(existing.get("scan_schedule_enabled", False))
         existing["scan_schedule"]         = existing.get("scan_schedule", "daily")
         if isinstance(existing["watch_folders"], str):
             existing["watch_folders"] = [

@@ -314,7 +314,8 @@ async function loadConfig() {
   document.getElementById('cfg-radarr-url').value     = cfg.radarr_url    || '';
   document.getElementById('cfg-radarr-key').value     = cfg.radarr_api_key || '';
   document.getElementById('cfg-polling-enabled').checked   = !!cfg.polling_enabled;
-  document.getElementById('cfg-scan-schedule').value       = cfg.scan_schedule || 'daily';
+  document.getElementById('cfg-scan-schedule-enabled').checked = !!cfg.scan_schedule_enabled;
+  document.getElementById('cfg-scan-schedule').value            = cfg.scan_schedule || 'daily';
   document.getElementById('cfg-nudenet-threshold').value  = cfg.nudenet_threshold ?? 0.6;
   document.getElementById('cfg-poll-interval').value  = cfg.poll_interval_seconds || 600;
   document.getElementById('cfg-vcs-grid').value       = cfg.vcs_grid      || '4x4';
@@ -336,6 +337,7 @@ async function saveConfig() {
     polling_enabled:       document.getElementById('cfg-polling-enabled').checked,
     nudenet_threshold:     parseFloat(document.getElementById('cfg-nudenet-threshold').value),
     poll_interval_seconds: parseInt(document.getElementById('cfg-poll-interval').value),
+    scan_schedule_enabled: document.getElementById('cfg-scan-schedule-enabled').checked,
     scan_schedule:         document.getElementById('cfg-scan-schedule').value,
     vcs_grid:              document.getElementById('cfg-vcs-grid').value.trim(),
     vcsi_timeout_seconds:  parseInt(document.getElementById('cfg-vcsi-timeout').value),
