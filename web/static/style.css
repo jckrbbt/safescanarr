@@ -492,3 +492,153 @@ textarea.input-full { resize: vertical; }
 
 .test-result.success { color: var(--accent2); }
 .test-result.error   { color: var(--danger); }
+
+/* ── Mode toggle ──────────────────────────────────────────────── */
+.mode-toggle {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.mode-option {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg3);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+
+.mode-option:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(108,140,255,.08);
+}
+
+.mode-option input[type="radio"] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.mode-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mode-label strong { font-size: 14px; }
+.mode-label small  { font-size: 12px; color: var(--text-dim); }
+
+/* ── Toggle switch ────────────────────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toggle-label { font-size: 13px; }
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input { display: none; }
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 24px;
+  cursor: pointer;
+  transition: background .2s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform .2s;
+}
+
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+/* ── Auto-handled cards ───────────────────────────────────────── */
+.auto-handled-card .sheet-img-placeholder {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: var(--bg3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.auto-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.badge-danger {
+  background: rgba(248,113,113,.2);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.auto-reason    { color: var(--text-dim); }
+.auto-confidence { color: var(--warn); }
+.auto-time      { color: var(--text-dim); margin-left: auto; }
+
+/* ── Flagged cards ────────────────────────────────────────────── */
+.sheet-card.flagged {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(248,113,113,.3);
+}
+
+.flagged-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  background: rgba(248,113,113,.85);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  padding: 4px;
+  z-index: 5;
+  letter-spacing: .05em;
+}
+
+.flag-badge {
+  display: inline-block;
+  background: rgba(248,113,113,.2);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 6px;
+  vertical-align: middle;
+}

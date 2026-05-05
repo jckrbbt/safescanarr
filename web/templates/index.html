@@ -15,6 +15,7 @@
     </div>
     <div class="nav-links">
       <a href="#" class="nav-link active" data-page="review">Review</a>
+      <a href="#" class="nav-link" data-page="auto-handled">Auto-handled</a>
       <a href="#" class="nav-link" data-page="config">Config</a>
       <a href="#" class="nav-link" data-page="database">Database</a>
       <a href="#" class="nav-link" data-page="logs">Logs</a>
@@ -33,26 +34,38 @@
           <button class="btn btn-secondary" onclick="loadSheets()">↻ Refresh</button>
         </div>
       </div>
-
-      <!-- Search + bulk toolbar -->
       <div class="review-toolbar">
         <input type="text" id="review-search" class="input-search" placeholder="🔍 Search sheets…" oninput="filterSheets()">
         <div class="bulk-actions" id="bulk-actions" style="display:none">
           <span id="selected-count" class="badge"></span>
           <button class="btn btn-success btn-sm" onclick="bulkReviewed()">✓ Mark Reviewed</button>
           <button class="btn btn-danger btn-sm" onclick="confirmBulkDelete()">🗑 Delete Media</button>
-          <button class="btn btn-secondary btn-sm" id="bulk-select-all" onclick="toggleSelectAll()" style="display:none">☑ Select All</button>
+          <button class="btn btn-secondary btn-sm" id="bulk-select-all" onclick="selectAllVisible()" style="display:none">☑ Select All</button>
           <button class="btn btn-secondary btn-sm" onclick="clearSelection()">✕ Deselect</button>
         </div>
         <label class="select-all-label">
           <input type="checkbox" id="select-all" onchange="toggleSelectAll()"> Select all
         </label>
       </div>
-
       <div id="sheets-empty" class="empty-state" style="display:none">
         <p>🎉 Nothing to review!</p>
       </div>
       <div id="sheets-grid" class="sheets-grid"></div>
+    </div>
+
+    <!-- ── AUTO-HANDLED ────────────────────────────────────────── -->
+    <div id="page-auto-handled" class="page">
+      <div class="page-header">
+        <h1>Auto-handled</h1>
+        <div class="header-actions">
+          <span class="hint">Files automatically processed in Safe Mode</span>
+          <button class="btn btn-secondary" onclick="loadAutoHandled()">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="auto-handled-empty" class="empty-state" style="display:none">
+        <p>No auto-handled items yet.</p>
+      </div>
+      <div id="auto-handled-grid" class="sheets-grid"></div>
     </div>
 
     <!-- ── CONFIG ──────────────────────────────────────────────── -->
@@ -66,22 +79,46 @@
       <div id="config-msg" class="msg" style="display:none"></div>
       <div class="config-form">
 
+        <!-- Scan Mode — at the top -->
         <section class="config-section">
-          <h2>Watch Folders</h2>
-          <p class="hint">One folder per line. Only media in these folders will be processed.</p>
-          <textarea id="cfg-watch-folders" rows="4" class="input-full"></textarea>
+          <h2>🔍 Scan Mode</h2>
+          <p class="hint">Controls how Safe Scanarr handles new media. In <strong>Review Mode</strong>, all contact sheets are queued for manual review — flagged content (once NSFW detection is enabled) is highlighted at the top. In <strong>Safe Mode</strong>, flagged content is automatically deleted and blacklisted in Sonarr/Radarr without manual review; the contact sheet is retained in the Auto-handled tab for auditing.</p>
+          <div class="mode-toggle">
+            <label class="mode-option">
+              <input type="radio" name="scan-mode" value="review" id="mode-review">
+              <span class="mode-label">
+                <strong>Review Mode</strong>
+                <small>All media queued for manual review</small>
+              </span>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="scan-mode" value="safe" id="mode-safe">
+              <span class="mode-label">
+                <strong>Safe Mode</strong>
+                <small>Flagged content auto-deleted, clean media queued for review</small>
+              </span>
+            </label>
+          </div>
         </section>
 
         <section class="config-section">
-          <h2>Output</h2>
-          <label>Contact Sheet Output Directory</label>
-          <input type="text" id="cfg-output-dir" class="input-full">
+          <h2>🔞 NSFW Detection</h2>
+          <p class="hint">NudeNet runs locally (no API calls) on every contact sheet. In <strong>Review Mode</strong>, flagged items appear at the top of the queue with a warning badge for manual review. In <strong>Safe Mode</strong>, flagged items are automatically deleted and blacklisted. Threshold controls sensitivity — lower values catch more but may produce false positives.</p>
+          <label>Confidence Threshold (0.1–1.0)</label>
+          <input type="number" id="cfg-nudenet-threshold" class="input-short" min="0.1" max="1.0" step="0.05">
+          <p class="hint" style="margin-top:6px">0.5 = more sensitive, 0.7 = fewer false positives. Default: 0.6</p>
+        </section>
+
+        <section class="config-section">
+          <h2>Watch Folders</h2>
+          <p class="hint">One folder per line. Only media in these folders will be scanned and processed.</p>
+          <textarea id="cfg-watch-folders" rows="4" class="input-full"></textarea>
         </section>
 
         <section class="config-section">
           <h2>Sonarr</h2>
           <label>URL</label>
-          <input type="text" id="cfg-sonarr-url" class="input-full">
+          <input type="text" id="cfg-sonarr-url" class="input-full" placeholder="http://localhost:8989">
           <label>API Key</label>
           <div class="input-row">
             <input type="text" id="cfg-sonarr-key" class="input-full">
@@ -93,7 +130,7 @@
         <section class="config-section">
           <h2>Radarr</h2>
           <label>URL</label>
-          <input type="text" id="cfg-radarr-url" class="input-full">
+          <input type="text" id="cfg-radarr-url" class="input-full" placeholder="http://localhost:7878">
           <label>API Key</label>
           <div class="input-row">
             <input type="text" id="cfg-radarr-key" class="input-full">
@@ -104,16 +141,32 @@
 
         <section class="config-section">
           <h2>Poller</h2>
-          <label>Poll Interval (seconds)</label>
+          <p class="hint">The poller periodically checks Sonarr and Radarr for newly imported files and triggers contact sheet generation automatically — without waiting for the nightly scan. Requires Sonarr/Radarr API keys to be configured.</p>
+          <div class="toggle-row">
+            <label class="toggle-label">Enable polling</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="cfg-polling-enabled">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <label style="margin-top:12px">Poll Interval (seconds)</label>
           <input type="number" id="cfg-poll-interval" class="input-short" min="60">
         </section>
 
         <section class="config-section">
           <h2>vcsi</h2>
+          <p class="hint">vcsi generates the contact sheet thumbnails from your video files. Grid size controls how many thumbnails appear (e.g. 4x4 = 16 frames). Timeout is the maximum time allowed per file — increase this for large or slow-to-process files.</p>
           <label>Grid Size (e.g. 4x4)</label>
           <input type="text" id="cfg-vcs-grid" class="input-short">
-          <label>vcsi Timeout (seconds)</label>
+          <label>Timeout (seconds)</label>
           <input type="number" id="cfg-vcsi-timeout" class="input-short" min="30">
+        </section>
+
+        <section class="config-section">
+          <h2>Database</h2>
+          <p class="hint">Clean Database removes records for files that no longer exist on disk or are outside your current watch folders. Useful after moving or deleting media, or after changing watch folders.</p>
+          <button class="btn btn-secondary" onclick="cleanDatabase()">🧹 Clean Database</button>
+          <div id="clean-db-result" class="test-result" style="margin-top:8px"></div>
         </section>
 
       </div>
@@ -141,6 +194,7 @@
               <th>Filename</th>
               <th>Path</th>
               <th>Last Updated</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="db-tbody"></tbody>

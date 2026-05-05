@@ -9,9 +9,8 @@ services:
     volumes:
       # Persistent data (db, logs, contact sheets)
       - ./data:/opt/safescanarr/data
-      # Media folders (read-only — add your paths here)
-      # - /path/to/your/movies:/mnt/media/Movies/HD-Kids:ro
-      # - /path/to/your/tv:/mnt/media/TV/Kids:ro
+      # Media folders — uncomment and update paths as needed
+      # - /path/to/your/media:/mnt/media
     environment:
       - BASE_DIR=/opt/safescanarr/data
       - WEB_PORT=8686

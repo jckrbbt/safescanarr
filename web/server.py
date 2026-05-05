@@ -48,10 +48,10 @@ def api_version():
 
 @app.route("/api/sheets")
 def api_sheets():
-    cfg = Config()
+    cfg        = Config()
     output_dir = Path(cfg.OUTPUT_DIR)
-    search = request.args.get("search", "").lower()
-    sheets = []
+    search     = request.args.get("search", "").lower()
+    sheets     = []
     if output_dir.exists():
         for f in sorted(output_dir.glob("*.jpg"),
                         key=lambda x: x.stat().st_mtime, reverse=True):
@@ -64,9 +64,13 @@ def api_sheets():
                 "stem":        f.stem,
                 "mtime":       f.stat().st_mtime,
                 "size":        f.stat().st_size,
-                "source_path": match["path"] if match else None,
-                "status":      match["status"] if match else None,
+                "source_path": match["path"]        if match else None,
+                "status":      match["status"]      if match else None,
+                "flagged":     bool(match["flagged"]) if match else False,
+                "flag_reason": match["flag_reason"] if match else None,
             })
+    # Sort flagged to top
+    sheets.sort(key=lambda s: (0 if s["flagged"] else 1, -s["mtime"]))
     return jsonify(sheets)
 
 
@@ -125,7 +129,7 @@ def api_sheet_delete_media():
 
 @app.route("/api/sheets/bulk-reviewed", methods=["POST"])
 def api_bulk_reviewed():
-    stems = request.get_json().get("stems", [])
+    stems = (request.get_json() or {}).get("stems", [])
     cfg   = Config()
     done  = []
     for stem in stems:
@@ -138,11 +142,11 @@ def api_bulk_reviewed():
 
 @app.route("/api/sheets/bulk-delete-media", methods=["POST"])
 def api_bulk_delete_media():
-    stems = request.get_json().get("stems", [])
+    stems   = (request.get_json() or {}).get("stems", [])
     results = []
+    cfg     = Config()
+    db      = get_db()
     for stem in stems:
-        db    = get_db()
-        cfg   = Config()
         match = db.find_file_by_stem(stem)
         if not match:
             results.append({"stem": stem, "status": "no_record"})
@@ -161,6 +165,52 @@ def api_bulk_delete_media():
     return jsonify({"status": "ok", "results": results})
 
 
+# ── Auto-handled (Safe Mode audit) ────────────────────────────────────────────
+
+@app.route("/api/auto-handled")
+def api_auto_handled():
+    db   = get_db()
+    cfg  = Config()
+    rows = db.list_auto_handled()
+    result = []
+    for r in rows:
+        sheet_path = Path(cfg.OUTPUT_DIR) / "auto" / (r["sheet_name"] or "")
+        result.append({
+            "id":         r["id"],
+            "name":       r["name"],
+            "path":       r["path"],
+            "sheet_name": r["sheet_name"],
+            "reason":     r["reason"],
+            "confidence": r["confidence"],
+            "handled_at": r["handled_at"],
+            "has_sheet":  sheet_path.exists() if r["sheet_name"] else False,
+        })
+    return jsonify(result)
+
+
+@app.route("/api/auto-handled/<int:record_id>/dismiss", methods=["POST"])
+def api_auto_handled_dismiss(record_id):
+    db  = get_db()
+    cfg = Config()
+    # Get sheet name before deleting record
+    cur = db._con.execute(
+        "SELECT sheet_name FROM auto_handled WHERE id = ?", (record_id,)
+    )
+    row = cur.fetchone()
+    if row and row["sheet_name"]:
+        sheet = Path(cfg.OUTPUT_DIR) / "auto" / row["sheet_name"]
+        if sheet.exists():
+            sheet.unlink()
+    db.delete_auto_handled(record_id)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/auto-handled/image/<filename>")
+def api_auto_handled_image(filename):
+    cfg = Config()
+    return send_from_directory(str(Path(cfg.OUTPUT_DIR) / "auto"), filename)
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 @app.route("/api/config", methods=["GET"])
@@ -174,12 +224,14 @@ def api_config_save():
     if not data:
         return jsonify({"status": "error", "message": "No JSON body"}), 400
     try:
-        # Merge with existing so unknown keys are preserved
         existing = config_module.get()
         existing.update(data)
-        # Ensure correct types
+        existing.pop("output_dir", None)  # never persist this
         existing["poll_interval_seconds"] = int(existing["poll_interval_seconds"])
         existing["vcsi_timeout_seconds"]  = int(existing["vcsi_timeout_seconds"])
+        existing["polling_enabled"]       = bool(existing.get("polling_enabled", False))
+        existing["scan_mode"]             = existing.get("scan_mode", "review")
+        existing["nudenet_threshold"]     = float(existing.get("nudenet_threshold", 0.6))
         if isinstance(existing["watch_folders"], str):
             existing["watch_folders"] = [
                 p.strip() for p in existing["watch_folders"].split(",") if p.strip()
@@ -238,6 +290,7 @@ def api_db_files():
         "page":     page,
         "per_page": per_page,
         "rows":     [dict(r) for r in page_rows],
+        "has_flagged": any(r["flagged"] for r in page_rows),
     })
 
 
@@ -249,6 +302,40 @@ def api_db_stats():
     ok     = sum(1 for r in rows if r["status"] == "ok")
     errors = sum(1 for r in rows if r["status"] == "error")
     return jsonify({"total": total, "ok": ok, "errors": errors})
+
+
+@app.route("/api/db/clean", methods=["POST"])
+def api_db_clean():
+    """Remove DB records for files that no longer exist or aren't in watch folders."""
+    cfg     = Config()
+    db      = get_db()
+    removed = db.clean_missing_files(cfg.WATCH_FOLDERS)
+    log.info("DB clean: removed %d stale records", removed)
+    return jsonify({"status": "ok", "removed": removed})
+
+
+@app.route("/api/db/requeue", methods=["POST"])
+def api_db_requeue():
+    """Re-generate the VCS for a specific file path."""
+    path = (request.get_json() or {}).get("path", "")
+    if not path:
+        return jsonify({"status": "error", "message": "No path provided"}), 400
+
+    if not Path(path).exists():
+        return jsonify({"status": "error", "message": "Source file no longer exists"}), 404
+
+    cfg = Config()
+    db  = get_db()
+
+    # Remove from DB so scanner treats it as new
+    db.delete_file(path)
+
+    subprocess.Popen(
+        [sys.executable, SCANNER, "--file", path, "--source", "requeue"],
+        stdout=open(cfg.LOG_FILE, "a"),
+        stderr=subprocess.STDOUT,
+    )
+    return jsonify({"status": "ok", "message": "Re-queued — check Review shortly"})
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
@@ -317,10 +404,7 @@ def _blacklist_in_arr(file_path: str, service: str, cfg: Config) -> dict:
 
     history_id = None
     for record in data.get("records", []):
-        if service == "sonarr":
-            path = (record.get("episodeFile") or {}).get("path", "")
-        else:
-            path = (record.get("movieFile") or {}).get("path", "")
+        path = (record.get("data") or {}).get("importedPath", "")
         if path == file_path:
             history_id = record.get("id")
             break
