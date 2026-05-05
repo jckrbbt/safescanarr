@@ -93,7 +93,7 @@ def run_web():
     from web.server import app
     cfg = Config()
     log.info("Web UI starting on %s:%d", cfg.WEB_HOST, cfg.WEB_PORT)
-    app.run(host=cfg.WEB_HOST, port=cfg.WEB_PORT, threaded=True)
+    app.run(host=cfg.WEB_HOST, port=cfg.WEB_PORT, threaded=True, use_reloader=False)
 
 
 if __name__ == "__main__":

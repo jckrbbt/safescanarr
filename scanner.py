@@ -119,14 +119,18 @@ def generate_vcs(video_path: Path, output_dir: Path, cfg, db: Database) -> bool:
 # NudeNet analysis
 # ---------------------------------------------------------------------------
 
-def analyse_sheet(sheet_path: Path, cfg) -> dict:
+def analyse_video_file(video_path: Path, cfg) -> dict:
     """
-    Run NudeNet on *sheet_path* if enabled in config.
+    Extract frames from *video_path* and run NudeNet on each full-res frame.
     Returns {"flagged": bool, "labels": [...], "max_conf": float, "error": str|None}
     """
     try:
-        from nudenet_scanner import analyse
-        return analyse(str(sheet_path), threshold=cfg.NUDENET_THRESHOLD)
+        from nudenet_scanner import analyse_video
+        return analyse_video(
+            str(video_path),
+            threshold=cfg.NUDENET_THRESHOLD,
+            num_frames=cfg.NUDENET_FRAMES,
+        )
     except Exception as e:
         log.error("NudeNet analysis error: %s", e)
         return {"flagged": False, "labels": [], "max_conf": 0.0, "error": str(e)}
