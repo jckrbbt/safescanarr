@@ -26,26 +26,15 @@ sys.path.insert(0, "/opt/safescanarr")
 from config import Config as _ConfigClass
 from database import Database
 
-# Logging configured by entrypoint when run via Docker.
-# When run standalone (CLI), configure here.
-_cfg_for_log = _ConfigClass()
+# When run as subprocess from entrypoint, stdout is redirected to the log file
+# by the parent process. Just log to stdout — no FileHandler needed.
 _root = logging.getLogger()
 if not _root.handlers:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(_cfg_for_log.LOG_FILE, mode="a"),
-        ],
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
-else:
-    # Add file handler if not already present
-    _log_file = _cfg_for_log.LOG_FILE
-    if not any(isinstance(h, logging.FileHandler) for h in _root.handlers):
-        _fh = logging.FileHandler(_log_file, mode="a")
-        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-        _root.addHandler(_fh)
 log = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {
@@ -266,7 +255,7 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
     abs_path = str(video.resolve())
     existing = db.get_file(abs_path)
 
-    # If file changed (upgrade/replace), reset to pending regardless of state
+    # If file changed (upgrade/replace), reset state before reprocessing
     if existing is not None:
         changed = (size != existing["size"] or abs(mtime - existing["mtime"]) > 1)
         if not changed and existing["status"] != "error":
@@ -274,6 +263,8 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
             return
         if changed:
             log.info("[%s] CHANGED (re-processing): %s", source, abs_path)
+            # Clear old state so it doesn't appear in multiple tabs
+            db.set_review_state(abs_path, "pending")
 
     log.info("[%s] Processing: %s", source, abs_path)
 

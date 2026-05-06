@@ -25,7 +25,7 @@ _DEFAULTS = {
     # NSFW Detection zones
     "zone_auto_approve":       0.2,   # below → approved automatically
     "zone_quarantine":         0.5,   # above → quarantined
-    "zone_auto_reject":        0.85,  # above → rejected immediately
+    "zone_auto_reject":        0.8,   # above → rejected immediately
     "nudenet_frames":          10,
     "nudenet_threshold":       0.1,   # kept for frame-level hit threshold
     # Quarantine
@@ -89,7 +89,7 @@ def _load() -> dict:
         "scan_schedule":         "daily",
         "zone_auto_approve":     0.2,
         "zone_quarantine":       0.5,
-        "zone_auto_reject":      0.85,
+        "zone_auto_reject":      0.8,
         "nudenet_frames":        10,
         "nudenet_threshold":     0.1,
         "quarantine_dir":        "",
