@@ -37,7 +37,6 @@ _DEFAULTS = {
     "webhook_on_reject":       True,
     # VCS
     "vcs_grid":                "4x4",
-    "vcs_quality":             80,    # JPEG quality 1-95
     "vcsi_timeout_seconds":    300,
 }
 
@@ -157,7 +156,6 @@ class Config:
         self.WEBHOOK_ON_REJECT       = cfg.get("webhook_on_reject", True)
         # VCS
         self.VCS_GRID                = cfg["vcs_grid"]
-        self.VCS_QUALITY             = int(cfg.get("vcs_quality", 80))
         self.VCSI_EXTRA_ARGS: list[str] = []
         self.VCSI_TIMEOUT_SECONDS    = cfg["vcsi_timeout_seconds"]
         # System

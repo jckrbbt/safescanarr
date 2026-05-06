@@ -38,6 +38,13 @@ body {
   z-index: 100;
 }
 
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
 .nav-brand {
   display: flex;
   align-items: center;
@@ -702,7 +709,7 @@ textarea.input-full { resize: vertical; }
 .nav-badge.danger   { background: rgba(248,113,113,.2); color: var(--danger); }
 
 /* Nav search */
-.nav-search { margin-left: auto; }
+.nav-search { margin-left: 0; }
 .nav-search input {
   background: var(--bg3);
   border: 1px solid var(--border);

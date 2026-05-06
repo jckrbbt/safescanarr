@@ -314,7 +314,6 @@ async function loadConfig() {
   document.getElementById("cfg-webhook-quarantine").checked= !!cfg.webhook_on_quarantine;
   document.getElementById("cfg-webhook-reject").checked    = !!cfg.webhook_on_reject;
   document.getElementById("cfg-vcs-grid").value            = cfg.vcs_grid          || "4x4";
-  document.getElementById("cfg-vcs-quality").value         = cfg.vcs_quality       ?? 80;
   document.getElementById("cfg-vcsi-timeout").value        = cfg.vcsi_timeout_seconds || 300;
   checkArrKeys();
 }
@@ -343,7 +342,6 @@ async function saveConfig() {
     webhook_on_quarantine:      document.getElementById("cfg-webhook-quarantine").checked,
     webhook_on_reject:          document.getElementById("cfg-webhook-reject").checked,
     vcs_grid:                   document.getElementById("cfg-vcs-grid").value.trim(),
-    vcs_quality:                parseInt(document.getElementById("cfg-vcs-quality").value),
     vcsi_timeout_seconds:       parseInt(document.getElementById("cfg-vcsi-timeout").value),
   };
 

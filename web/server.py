@@ -217,7 +217,6 @@ def api_config_save():
         # Type coercions
         existing["poll_interval_seconds"]      = int(existing.get("poll_interval_seconds", 600))
         existing["vcsi_timeout_seconds"]       = int(existing.get("vcsi_timeout_seconds", 300))
-        existing["vcs_quality"]                = int(existing.get("vcs_quality", 80))
         existing["nudenet_frames"]             = int(existing.get("nudenet_frames", 10))
         existing["nudenet_threshold"]          = float(existing.get("nudenet_threshold", 0.1))
         existing["zone_auto_approve"]          = float(existing.get("zone_auto_approve", 0.1))

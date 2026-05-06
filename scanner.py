@@ -80,17 +80,13 @@ def generate_vcs(video_path: Path, output_dir: Path, cfg, db: Database) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / (video_path.stem + ".jpg")
 
-    extra = list(cfg.VCSI_EXTRA_ARGS)
-    if cfg.VCS_QUALITY and cfg.VCS_QUALITY != 95:
-        extra += ["--jpeg-quality", str(cfg.VCS_QUALITY)]
-
     cmd = [
         get_vcsi_bin(),
         str(video_path),
         "-t",
         "-g", cfg.VCS_GRID,
         "-o", str(out_file),
-    ] + extra
+    ] + list(cfg.VCSI_EXTRA_ARGS)
 
     log.info("Generating contact sheet: %s", video_path.name)
     try:

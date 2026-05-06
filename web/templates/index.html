@@ -13,6 +13,7 @@
       <span class="nav-title">Safe Scanarr</span>
       <span class="nav-version" id="nav-version"></span>
     </div>
+    <div class="nav-right">
     <div class="nav-links">
       <a href="#" class="nav-link active" data-page="pending">
         Review <span class="nav-badge" id="badge-pending"></span>
@@ -29,8 +30,9 @@
       <a href="#" class="nav-link" data-page="config">Config</a>
       <a href="#" class="nav-link" data-page="logs">Logs</a>
     </div>
-    <div class="nav-search">
-      <input type="text" id="global-search" placeholder="🔍 Search…" oninput="onGlobalSearch()">
+      <div class="nav-search">
+        <input type="text" id="global-search" placeholder="🔍 Search…" oninput="onGlobalSearch()">
+      </div>
     </div>
   </nav>
 
@@ -277,8 +279,6 @@
           <p class="hint">vcsi generates the contact sheet thumbnails. Grid size controls thumbnail count (4x4 = 16 frames). Quality affects file size — 80 is a good balance between quality and storage.</p>
           <label>Grid Size</label>
           <input type="text" id="cfg-vcs-grid" class="input-short" placeholder="4x4">
-          <label style="margin-top:12px">JPEG Quality (1–95)</label>
-          <input type="number" id="cfg-vcs-quality" class="input-short" min="1" max="95">
           <label style="margin-top:12px">Timeout (seconds)</label>
           <input type="number" id="cfg-vcsi-timeout" class="input-short" min="30">
         </section>
