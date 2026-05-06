@@ -126,13 +126,16 @@ def analyse_video_file(video_path: Path, cfg) -> dict:
 def determine_state(max_conf: float, cfg) -> str:
     """
     Apply zone thresholds to determine the review state.
-    If quarantine_auto_reject_days == 0, quarantine zone is skipped → reject.
+      >= zone_auto_reject  → rejected immediately
+      >= zone_quarantine   → quarantined (video moved)
+      < zone_auto_approve  → approved automatically
+      else                 → pending (review queue)
+    quarantine_auto_reject_days: 0 = never auto-reject, >0 = reject after N days
     """
     if max_conf >= cfg.ZONE_AUTO_REJECT:
         return "rejected"
     if max_conf >= cfg.ZONE_QUARANTINE:
-        # Skip quarantine → immediate reject if auto_reject_days == 0
-        return "rejected" if cfg.QUARANTINE_AUTO_REJECT_DAYS == 0 else "quarantined"
+        return "quarantined"
     if max_conf < cfg.ZONE_AUTO_APPROVE:
         return "approved"
     return "pending"

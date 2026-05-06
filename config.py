@@ -23,14 +23,14 @@ _DEFAULTS = {
     "scan_schedule_enabled":   False,
     "scan_schedule":           "daily",
     # NSFW Detection zones
-    "zone_auto_approve":       0.1,   # below → approved automatically
-    "zone_quarantine":         0.4,   # above → quarantined
+    "zone_auto_approve":       0.2,   # below → approved automatically
+    "zone_quarantine":         0.5,   # above → quarantined
     "zone_auto_reject":        0.85,  # above → rejected immediately
     "nudenet_frames":          10,
     "nudenet_threshold":       0.1,   # kept for frame-level hit threshold
     # Quarantine
     "quarantine_dir":          "",    # empty = BASE_DIR/quarantine
-    "quarantine_auto_reject_days": 0, # 0 = off, >0 = auto-reject after N days
+    "quarantine_auto_reject_days": 0, # 0 = never auto-reject, >0 = reject after N days
     # Webhook
     "webhook_url":             "",
     "webhook_on_quarantine":   True,
@@ -87,8 +87,8 @@ def _load() -> dict:
         "poll_interval_seconds": int(os.environ.get("POLL_INTERVAL_SECONDS", 600)),
         "scan_schedule_enabled": False,
         "scan_schedule":         "daily",
-        "zone_auto_approve":     0.1,
-        "zone_quarantine":       0.4,
+        "zone_auto_approve":     0.2,
+        "zone_quarantine":       0.5,
         "zone_auto_reject":      0.85,
         "nudenet_frames":        10,
         "nudenet_threshold":     0.1,
