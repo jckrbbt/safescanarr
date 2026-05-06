@@ -21,7 +21,7 @@ document.addEventListener("DOMContentLoaded", () => {
   checkScanStatus();
   scanPollTimer = setInterval(checkScanStatus, 5000);
 
-  document.querySelectorAll(".nav-link").forEach(link => {
+  document.querySelectorAll(".sidebar-link").forEach(link => {
     link.addEventListener("click", e => {
       e.preventDefault();
       navigateTo(link.dataset.page);
