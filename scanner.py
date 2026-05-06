@@ -26,15 +26,26 @@ sys.path.insert(0, "/opt/safescanarr")
 from config import Config as _ConfigClass
 from database import Database
 
+# Logging configured by entrypoint when run via Docker.
+# When run standalone (CLI), configure here.
 _cfg_for_log = _ConfigClass()
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(_cfg_for_log.LOG_FILE, mode="a"),
-    ],
-)
+_root = logging.getLogger()
+if not _root.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(_cfg_for_log.LOG_FILE, mode="a"),
+        ],
+    )
+else:
+    # Add file handler if not already present
+    _log_file = _cfg_for_log.LOG_FILE
+    if not any(isinstance(h, logging.FileHandler) for h in _root.handlers):
+        _fh = logging.FileHandler(_log_file, mode="a")
+        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        _root.addHandler(_fh)
 log = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {
@@ -166,20 +177,13 @@ def action_reject(video_path: Path, cfg, db: Database,
                   abs_path: str, nudenet_result: dict,
                   sheet_path: Path = None,
                   from_quarantine: bool = False) -> None:
-    """Delete video (and sheet) permanently."""
-    # Delete video
+    """Delete video permanently. Sheet is retained for audit trail."""
     target = video_path
-    if from_quarantine:
-        # video_path is already the quarantine path
-        target = video_path
     if target.exists():
         target.unlink()
         log.warning("REJECTED (deleted): %s", target)
 
-    # Delete sheet
-    if sheet_path and sheet_path.exists():
-        sheet_path.unlink()
-        log.info("Sheet deleted: %s", sheet_path)
+    # Sheet is intentionally kept — hidden in UI until user clicks to reveal
 
     _send_webhook(cfg, "rejected", abs_path, nudenet_result)
     _blacklist(abs_path, cfg)

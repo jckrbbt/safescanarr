@@ -98,6 +98,7 @@ function renderTab(tab) {
     const imgSrc  = sheet.has_sheet
                   ? `/api/sheets/image/${encodeURIComponent(sheet.filename)}`
                   : null;
+    const isRejected = tab === "rejected";
 
     card.innerHTML = `
       <div class="sheet-select">
@@ -106,7 +107,11 @@ function renderTab(tab) {
       </div>
       ${sheet.flagged ? '<div class="flagged-overlay">⚠ NSFW</div>' : ""}
       ${imgSrc
-        ? `<img class="sheet-img" src="${imgSrc}" alt="" onclick="openLightbox(this.src)" loading="lazy">`
+        ? isRejected
+          ? `<div class="sheet-img-hidden" onclick="revealImage(this, '${imgSrc}')">
+               <div class="sheet-img-hidden-label">⚠ Click to reveal</div>
+             </div>`
+          : `<img class="sheet-img" src="${imgSrc}" alt="" onclick="openLightbox(this.src)" loading="lazy">`
         : `<div class="sheet-img-placeholder">No sheet</div>`}
       <div class="sheet-info">
         <div class="sheet-name">${conf}${sheet.stem}</div>
@@ -442,6 +447,17 @@ function showModal(title, body, onConfirm) {
 }
 function closeModal() {
   document.getElementById("modal-overlay").style.display = "none";
+}
+
+// ── Reveal hidden image ──────────────────────────────────────────
+function revealImage(el, src) {
+  const img = document.createElement("img");
+  img.className = "sheet-img";
+  img.src       = src;
+  img.alt       = "";
+  img.onclick   = () => openLightbox(src);
+  img.loading   = "lazy";
+  el.replaceWith(img);
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────

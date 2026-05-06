@@ -1,6 +1,5 @@
 services:
   safescanarr:
-    image: safescanarr:0.15-beta
     build: .
     container_name: safescanarr
     restart: unless-stopped

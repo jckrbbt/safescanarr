@@ -14,11 +14,14 @@ from datetime import datetime
 sys.path.insert(0, "/opt/safescanarr")
 from config import Config
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+# Configure root logger once — all modules inherit this
+root_log = logging.getLogger()
+if not root_log.handlers:
+    root_log.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    root_log.addHandler(sh)
 log = logging.getLogger(__name__)
 
 SCANNER = "/opt/safescanarr/scanner.py"
@@ -93,7 +96,7 @@ def run_web():
     from web.server import app
     cfg = Config()
     log.info("Web UI starting on %s:%d", cfg.WEB_HOST, cfg.WEB_PORT)
-    app.run(host=cfg.WEB_HOST, port=cfg.WEB_PORT, threaded=True, use_reloader=False)
+    app.run(host=cfg.WEB_HOST, port=cfg.WEB_PORT, threaded=True, use_reloader=False, debug=False)
 
 
 if __name__ == "__main__":

@@ -142,10 +142,7 @@ def api_reject():
             video_path.unlink()
             log.info("Rejected (deleted): %s", video_path)
 
-        # Delete sheet
-        sheet = Path(cfg.OUTPUT_DIR) / (stem + ".jpg")
-        if sheet.exists():
-            sheet.unlink()
+        # Keep sheet for audit trail — hidden in UI until user clicks to reveal
 
         # Blacklist
         _blacklist_path(row["path"], cfg)

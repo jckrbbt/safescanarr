@@ -792,3 +792,26 @@ textarea.input-full { resize: vertical; }
   font-size: 13px;
   cursor: pointer;
 }
+
+/* ── Hidden image (rejected tab) ─────────────────────────────── */
+.sheet-img-hidden {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: var(--bg3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background .15s;
+}
+
+.sheet-img-hidden:hover { background: var(--border); }
+
+.sheet-img-hidden-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--danger);
+  text-align: center;
+  padding: 12px;
+}
