@@ -299,19 +299,15 @@ def api_scan_status():
 
 @app.route("/api/scan/stop", methods=["POST"])
 def api_scan_stop():
-    import os, signal
     db  = get_db()
     pid = db.get_scan_pid()
     if not pid:
         return jsonify({"status": "not_running"})
-    try:
-        os.kill(pid, signal.SIGTERM)
-        db.clear_scan_pid()
-        log.info("Scan stopped (pid %d)", pid)
-        return jsonify({"status": "stopped"})
-    except OSError:
-        db.clear_scan_pid()
-        return jsonify({"status": "already_stopped"})
+    # Clear the PID — scanner checks between files and exits gracefully
+    # Do NOT send SIGTERM; that kills the process mid-file and closes the log pipe
+    db.clear_scan_pid()
+    log.info("Scan stop requested — scanner will stop after current file (pid %d)", pid)
+    return jsonify({"status": "stopping"})
 
 
 @app.route("/api/sheets/remove-rejected", methods=["POST"])
