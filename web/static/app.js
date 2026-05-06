@@ -33,9 +33,9 @@ document.addEventListener("DOMContentLoaded", () => {
 function navigateTo(page) {
   currentTab = page;
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".nav-link").forEach(l => l.classList.remove("active"));
+  document.querySelectorAll(".sidebar-link").forEach(l => l.classList.remove("active"));
   const pageEl = document.getElementById(`page-${page}`);
-  const linkEl = document.querySelector(`[data-page="${page}"]`);
+  const linkEl = document.querySelector(`.sidebar-link[data-page="${page}"]`);
   if (pageEl) pageEl.classList.add("active");
   if (linkEl) linkEl.classList.add("active");
 
@@ -91,37 +91,59 @@ function renderTab(tab) {
 
   sheets.forEach((sheet, idx) => {
     window._stems[tab][idx] = sheet.stem;
+
+    const isApproved = tab === "approved";
+    const isRejected = tab === "rejected";
+    const showNsfw   = sheet.flagged && !isApproved;
+
     const card = document.createElement("div");
-    card.className = "sheet-card" + (sheet.flagged ? " flagged" : "") +
+    card.className = "sheet-card" + (showNsfw ? " flagged" : "") +
                      (selections[tab].has(sheet.stem) ? " selected" : "");
     card.dataset.stem = sheet.stem;
 
-    const conf    = sheet.nsfw_confidence != null
-                  ? `<span class="conf-badge">${Math.round(sheet.nsfw_confidence * 100)}%</span>` : "";
     const checked = selections[tab].has(sheet.stem) ? "checked" : "";
     const imgSrc  = sheet.has_sheet
                   ? `/api/sheets/image/${encodeURIComponent(sheet.filename)}`
                   : null;
-    const isRejected = tab === "rejected";
 
-    card.innerHTML = `
+    // Confidence badge with label tooltip (only on non-approved flagged items)
+    let confBadge = "";
+    if (sheet.nsfw_confidence != null && !isApproved) {
+      const pct     = Math.round(sheet.nsfw_confidence * 100);
+      const tipText = sheet.flag_reason || "NSFW detected";
+      confBadge = `<span class="conf-badge" title="${tipText}">${pct}%</span>`;
+    }
+
+    // Label breakdown (shown below name on flagged non-approved items)
+    let labelBreakdown = "";
+    if (showNsfw && sheet.flag_reason) {
+      const labels = sheet.flag_reason.split(", ").map(l => {
+        const m = l.match(/^(.+?)\s*\((\d+)%\)$/);
+        if (m) return `<span class="label-chip">${m[1].replace(/_/g," ")} ${m[2]}%</span>`;
+        return `<span class="label-chip">${l.replace(/_/g," ")}</span>`;
+      }).join("");
+      labelBreakdown = `<div class="label-breakdown">${labels}</div>`;
+    }
+
+    card.innerHTML = \`
       <div class="sheet-select">
-        <input type="checkbox" class="sheet-checkbox" data-tab="${tab}" data-idx="${idx}" ${checked}
-               onchange="toggleSelectByIdx('${tab}', ${idx}, this.checked)">
+        <input type="checkbox" class="sheet-checkbox" data-tab="\${tab}" data-idx="\${idx}" \${checked}
+               onchange="toggleSelectByIdx('\${tab}', \${idx}, this.checked)">
       </div>
-      ${sheet.flagged ? '<div class="flagged-overlay">⚠ NSFW</div>' : ""}
-      ${imgSrc
+      \${showNsfw ? '<div class="flagged-overlay">⚠ NSFW</div>' : ""}
+      \${imgSrc
         ? isRejected
-          ? `<div class="sheet-img-hidden" onclick="revealImage(this, '${imgSrc}')">
+          ? \`<div class="sheet-img-hidden" onclick="revealImage(this, '\${imgSrc}')">
                <div class="sheet-img-hidden-label">⚠ Click to reveal</div>
-             </div>`
-          : `<img class="sheet-img" src="${imgSrc}" alt="" onclick="openLightbox(this.src)" loading="lazy">`
-        : `<div class="sheet-img-placeholder">No sheet</div>`}
+             </div>\`
+          : \`<img class="sheet-img" src="\${imgSrc}" alt="" onclick="openLightbox(this.src)" loading="lazy">\`
+        : \`<div class="sheet-img-placeholder">No sheet</div>\`}
       <div class="sheet-info">
-        <div class="sheet-name">${conf}${sheet.stem}</div>
-        <div class="sheet-path" title="${sheet.source_path || ""}">${sheet.source_path || "Unknown"}</div>
-        ${renderActions(tab, idx, sheet)}
-      </div>`;
+        <div class="sheet-name">\${confBadge}\${sheet.stem}</div>
+        \${labelBreakdown}
+        <div class="sheet-path" title="\${sheet.source_path || ""}">\${sheet.source_path || "Unknown"}</div>
+        \${renderActions(tab, idx, sheet)}
+      </div>\`;
     grid.appendChild(card);
   });
 }
@@ -274,7 +296,7 @@ async function toggleScan() {
     const res = await fetch("/api/scan/stop", {method: "POST"});
     if (res.ok) {
       setScanRunning(false);
-      toast("Scan stopped");
+      toast("Scan stopping — current file will finish before stopping");
     }
   } else {
     const res = await fetch("/api/scan", {method: "POST"});
@@ -338,8 +360,28 @@ function updateBulkBar(tab) {
 }
 
 // ── Global search ─────────────────────────────────────────────────
-function onGlobalSearch() {
-  if (TABS.includes(currentTab)) loadPage(currentTab);
+async function onGlobalSearch() {
+  // Search all tabs simultaneously and update badge counts
+  const q = document.getElementById("global-search")?.value?.toLowerCase() || "";
+  if (q.length === 0) {
+    // Empty search — just reload current tab
+    if (TABS.includes(currentTab)) loadPage(currentTab);
+    return;
+  }
+  // Load all tabs with search filter
+  for (const tab of TABS) {
+    const search = encodeURIComponent(q);
+    const res    = await fetch(`/api/sheets?state=${tab}&search=${search}`);
+    tabSheets[tab] = await res.json();
+    // Update badge to show search result count
+    const badge = document.getElementById(`badge-${tab}`);
+    if (badge) badge.textContent = tabSheets[tab].length > 0 ? tabSheets[tab].length : "";
+    if (tab === currentTab) {
+      selections[tab].clear();
+      renderTab(tab);
+      updateBulkBar(tab);
+    }
+  }
 }
 
 // ── Config ────────────────────────────────────────────────────────

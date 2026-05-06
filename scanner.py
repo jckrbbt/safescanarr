@@ -318,15 +318,40 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
         db.set_review_state(abs_path, "quarantined", quarantine_path=quarantine_path)
 
 
+def _stop_requested(db: Database) -> bool:
+    """Returns True if a stop has been requested (PID cleared externally)."""
+    import os
+    pid = db.get_scan_pid()
+    if pid is None:
+        return True  # PID was cleared = stop requested
+    try:
+        os.kill(pid, 0)
+        return False
+    except OSError:
+        return True
+
+
 def run_scan(db: Database) -> None:
     cfg = _ConfigClass()
     log.info("=== Full scan started ===")
+
+    # Register our PID so stop button can find us
+    import os
+    db.set_scan_pid(os.getpid())
+
     counts = {"new": 0, "changed": 0, "skipped": 0, "error": 0}
 
     for folder in cfg.WATCH_FOLDERS:
         folder = Path(folder)
         log.info("Scanning folder: %s", folder)
         for video in scan_folder(folder):
+            # Check for stop signal between files
+            if _stop_requested(db):
+                log.info("=== Scan stop requested — stopping after current file ===")
+                log.info("=== Scan stopped — new:%d changed:%d skipped:%d ===",
+                         counts["new"], counts["changed"], counts["skipped"])
+                return
+
             name, size, mtime = file_fingerprint(video)
             abs_path = str(video.resolve())
             existing = db.get_file(abs_path)
@@ -359,6 +384,7 @@ def run_scan(db: Database) -> None:
             db.set_review_state(row["path"], "rejected")
             _send_webhook(cfg, "rejected", row["path"], {})
 
+    db.clear_scan_pid()
     log.info("=== Scan complete — new:%d changed:%d skipped:%d ===",
              counts["new"], counts["changed"], counts["skipped"])
 
