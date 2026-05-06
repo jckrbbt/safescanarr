@@ -258,9 +258,15 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
     # If file changed (upgrade/replace), reset state before reprocessing
     if existing is not None:
         changed = (size != existing["size"] or abs(mtime - existing["mtime"]) > 1)
-        if not changed and existing["status"] != "error":
-            log.debug("[%s] UNCHANGED, skipping: %s", source, abs_path)
-            return
+        # Skip if unchanged, unless it errored AND is still pending (retry errors in review queue only)
+        if not changed:
+            if existing["status"] != "error":
+                log.debug("[%s] UNCHANGED, skipping: %s", source, abs_path)
+                return
+            if existing["review_state"] != "pending":
+                log.debug("[%s] Error but already handled (state=%s), skipping: %s",
+                          source, existing["review_state"], abs_path)
+                return
         if changed:
             log.info("[%s] CHANGED (re-processing): %s", source, abs_path)
             # Clear old state so it doesn't appear in multiple tabs
