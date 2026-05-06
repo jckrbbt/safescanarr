@@ -5,6 +5,8 @@ let currentTab = "pending";
 let tabSheets  = {};        // { tabName: [{...}] }
 let selections = {};        // { tabName: Set<stem> }
 let statsTimer = null;
+let scanPollTimer = null;
+let scanRunning = false;
 
 TABS.forEach(t => {
   tabSheets[t]  = [];
@@ -15,7 +17,9 @@ document.addEventListener("DOMContentLoaded", () => {
   loadVersion();
   loadStats();
   navigateTo("pending");
-  statsTimer = setInterval(loadStats, 60000);
+  statsTimer    = setInterval(loadStats, 60000);
+  checkScanStatus();
+  scanPollTimer = setInterval(checkScanStatus, 5000);
 
   document.querySelectorAll(".nav-link").forEach(link => {
     link.addEventListener("click", e => {
@@ -187,6 +191,7 @@ async function performAction(action, stems) {
     "reject":           "/api/sheets/reject",
     "quarantine-single":"/api/sheets/quarantine",
     "requeue":          "/api/sheets/requeue",
+    "remove-rejected":  "/api/sheets/remove-rejected",
   };
 
   const url = endpoints[action];
@@ -219,6 +224,18 @@ async function performAction(action, stems) {
     return;
   }
 
+  if (action === "remove-rejected") {
+    const res  = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({stems}),
+    });
+    const data = await res.json();
+    if (res.ok) toast(`Removed ${data.removed.length} entr${data.removed.length > 1 ? "ies" : "y"} ✓`);
+    else toast("Error removing", true);
+    return;
+  }
+
   const res  = await fetch(url, {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -233,9 +250,39 @@ async function performAction(action, stems) {
   }
 }
 
-async function triggerScan() {
-  await fetch("/api/scan", {method: "POST"});
-  toast("Scan started — check Logs for progress");
+async function checkScanStatus() {
+  const res  = await fetch("/api/scan/status");
+  const data = await res.json();
+  setScanRunning(data.running);
+}
+
+function setScanRunning(running) {
+  scanRunning = running;
+  const btn = document.getElementById("scan-btn");
+  if (!btn) return;
+  if (running) {
+    btn.textContent = "■ Stop Scan";
+    btn.className   = "btn btn-danger";
+  } else {
+    btn.textContent = "▶ Run Scan Now";
+    btn.className   = "btn btn-primary";
+  }
+}
+
+async function toggleScan() {
+  if (scanRunning) {
+    const res = await fetch("/api/scan/stop", {method: "POST"});
+    if (res.ok) {
+      setScanRunning(false);
+      toast("Scan stopped");
+    }
+  } else {
+    const res = await fetch("/api/scan", {method: "POST"});
+    if (res.ok) {
+      setScanRunning(true);
+      toast("Scan started — check Logs for progress");
+    }
+  }
 }
 
 // ── Selection ─────────────────────────────────────────────────────

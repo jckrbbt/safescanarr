@@ -44,7 +44,7 @@
         <h1>Review Queue</h1>
         <div class="header-actions">
           <span id="pending-count" class="badge"></span>
-          <button class="btn btn-primary" onclick="triggerScan()">▶ Run Scan Now</button>
+          <button class="btn btn-primary" id="scan-btn" onclick="toggleScan()">▶ Run Scan Now</button>
           <button class="btn btn-secondary" onclick="loadPage('pending')">↻ Refresh</button>
         </div>
       </div>
@@ -120,6 +120,15 @@
         <h1>Rejected</h1>
         <div class="header-actions">
           <span id="rejected-count" class="badge"></span>
+          <div class="bulk-actions" id="bulk-actions-rejected" style="display:none">
+            <span id="selected-count-rejected" class="badge"></span>
+            <button class="btn btn-secondary btn-sm" onclick="bulkAction('rejected','remove-rejected')">🗑 Remove Entry</button>
+            <button class="btn btn-secondary btn-sm" id="bulk-select-all-rejected" onclick="selectAllVisible('rejected')" style="display:none">☑ Select All</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
+          </div>
+          <label class="select-all-label">
+            <input type="checkbox" id="select-all-rejected" onchange="toggleSelectAll('rejected')"> Select all
+          </label>
           <button class="btn btn-secondary" onclick="loadPage('rejected')">↻ Refresh</button>
         </div>
       </div>

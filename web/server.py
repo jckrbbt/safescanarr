@@ -282,6 +282,63 @@ def api_db_clean():
     return jsonify({"status": "ok", "removed": removed})
 
 
+@app.route("/api/scan/status")
+def api_scan_status():
+    db  = get_db()
+    pid = db.get_scan_pid()
+    if pid:
+        # Check if process is still running
+        import os
+        try:
+            os.kill(pid, 0)
+            return jsonify({"running": True, "pid": pid})
+        except OSError:
+            db.clear_scan_pid()
+    return jsonify({"running": False})
+
+
+@app.route("/api/scan/stop", methods=["POST"])
+def api_scan_stop():
+    import os, signal
+    db  = get_db()
+    pid = db.get_scan_pid()
+    if not pid:
+        return jsonify({"status": "not_running"})
+    try:
+        os.kill(pid, signal.SIGTERM)
+        db.clear_scan_pid()
+        log.info("Scan stopped (pid %d)", pid)
+        return jsonify({"status": "stopped"})
+    except OSError:
+        db.clear_scan_pid()
+        return jsonify({"status": "already_stopped"})
+
+
+@app.route("/api/sheets/remove-rejected", methods=["POST"])
+def api_remove_rejected():
+    """Remove a rejected entry from DB and delete its sheet."""
+    data  = request.get_json() or {}
+    stems = data.get("stems", [])
+    if not stems:
+        stem = data.get("stem")
+        if stem: stems = [stem]
+
+    db  = get_db()
+    cfg = Config()
+    done = []
+    for stem in stems:
+        row = db.find_file_by_stem(stem)
+        if not row or row["review_state"] != "rejected":
+            continue
+        # Delete sheet if exists
+        sheet = Path(cfg.OUTPUT_DIR) / (stem + ".jpg")
+        if sheet.exists():
+            sheet.unlink()
+        db.delete_file(row["path"])
+        done.append(stem)
+    return jsonify({"status": "ok", "removed": done})
+
+
 # ── Logs ──────────────────────────────────────────────────────────
 @app.route("/api/logs")
 def api_logs():
@@ -302,12 +359,23 @@ def api_logs():
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
     cfg = Config()
-    subprocess.Popen(
+    db  = get_db()
+    # Check if already running
+    existing_pid = db.get_scan_pid()
+    if existing_pid:
+        import os
+        try:
+            os.kill(existing_pid, 0)
+            return jsonify({"status": "already_running", "pid": existing_pid})
+        except OSError:
+            db.clear_scan_pid()
+    proc = subprocess.Popen(
         [sys.executable, SCANNER, "--scan"],
         stdout=open(cfg.LOG_FILE, "a"),
         stderr=subprocess.STDOUT,
     )
-    return jsonify({"status": "started"})
+    db.set_scan_pid(proc.pid)
+    return jsonify({"status": "started", "pid": proc.pid})
 
 
 # ── Helpers ───────────────────────────────────────────────────────

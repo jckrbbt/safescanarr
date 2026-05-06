@@ -205,6 +205,21 @@ class Database:
     # Poller state
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Scan state (used by stop-scan feature)
+    # ------------------------------------------------------------------
+
+    def set_scan_pid(self, pid: int) -> None:
+        self.set_poller_state("scan_pid", str(pid))
+
+    def clear_scan_pid(self) -> None:
+        self._con.execute("DELETE FROM state WHERE key = 'scan_pid'")
+        self._con.commit()
+
+    def get_scan_pid(self) -> Optional[int]:
+        val = self.get_poller_state("scan_pid")
+        return int(val) if val else None
+
     def get_poller_state(self, key: str) -> Optional[str]:
         cur = self._con.execute("SELECT value FROM state WHERE key = ?", (key,))
         row = cur.fetchone()
