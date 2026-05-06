@@ -80,7 +80,6 @@
           <div class="bulk-actions" id="bulk-actions-pending" style="display:none">
             <span id="selected-count-pending" class="badge"></span>
             <button class="btn btn-success btn-sm" onclick="bulkAction('pending','approve')">✓ Approve</button>
-            <button class="btn btn-warn btn-sm" onclick="bulkAction('pending','quarantine-single')">⚠ Quarantine</button>
             <button class="btn btn-danger btn-sm" onclick="confirmBulkAction('pending','reject')">✗ Reject</button>
             <button class="btn btn-secondary btn-sm" id="bulk-select-all-pending" onclick="selectAllVisible('pending')" style="display:none">☑ Select All</button>
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('pending')">✕ Clear</button>
@@ -129,8 +128,8 @@
         <div class="review-toolbar">
           <div class="bulk-actions" id="bulk-actions-quarantined" style="display:none">
             <span id="selected-count-quarantined" class="badge"></span>
-            <button class="btn btn-success btn-sm" onclick="bulkAction('quarantined','approve')">✓ Approve & Restore</button>
-            <button class="btn btn-danger btn-sm" onclick="confirmBulkAction('quarantined','reject')">✗ Reject & Delete</button>
+            <button class="btn btn-success btn-sm" onclick="bulkAction('quarantined','approve')">✓ Restore</button>
+            <button class="btn btn-danger btn-sm" onclick="confirmBulkAction('quarantined','reject')">✗ Delete</button>
             <button class="btn btn-secondary btn-sm" id="bulk-select-all-quarantined" onclick="selectAllVisible('quarantined')" style="display:none">☑ Select All</button>
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('quarantined')">✕ Clear</button>
           </div>

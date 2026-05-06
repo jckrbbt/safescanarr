@@ -24,9 +24,11 @@ NSFW_LABELS = {
     "FEMALE_BREAST_EXPOSED",
     "FEMALE_GENITALIA_EXPOSED",
     "MALE_GENITALIA_EXPOSED",
-    "MALE_BREAST_EXPOSED",
-    "BUTTOCKS_EXPOSED",
     "ANUS_EXPOSED",
+    # Excluded — too many false positives for kids library:
+    # "BUTTOCKS_EXPOSED"
+    # "MALE_BREAST_EXPOSED"
+    # "ARMPITS_EXPOSED"
 }
 
 _detector = None

@@ -713,13 +713,109 @@ function closeModal() {
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────
-function openLightbox(src) {
-  const lb     = document.createElement("div");
+var _lightboxTab   = null;
+var _lightboxIdx   = null;
+var _lightboxTotal = 0;
+
+function openLightbox(src, tab, idx) {
+  // Remove existing
+  var existing = document.querySelector(".lightbox");
+  if (existing) existing.remove();
+
+  _lightboxTab   = tab   || null;
+  _lightboxIdx   = idx   != null ? idx : null;
+  _lightboxTotal = tab   ? (tabSheets[tab] || []).length : 0;
+
+  var lb = document.createElement("div");
   lb.className = "lightbox";
-  lb.innerHTML = '<img src="' + src + '">';
-  lb.onclick   = function() { lb.remove(); };
+  lb.id = "lightbox";
+
+  // Build content
+  var sheet = (tab && idx != null) ? tabSheets[tab][idx] : null;
+  var labelsHtml = "";
+  if (sheet && sheet.flag_reason) {
+    var chips = sheet.flag_reason.split(", ").map(function(l) {
+      return '<span class="label-chip">' + l.replace(/_/g, " ") + '</span>';
+    }).join("");
+    var pct = sheet.nsfw_confidence ? Math.round(sheet.nsfw_confidence * 100) + "% confidence" : "";
+    labelsHtml = '<div class="lightbox-labels">' + (pct ? '<span class="conf-badge">' + pct + '</span>' : '') + chips + '</div>';
+  }
+
+  // Actions
+  var actionsHtml = "";
+  if (tab === "pending" && idx != null) {
+    actionsHtml = '<div class="lightbox-actions">' +
+      '<button class="btn btn-success" onclick="lightboxAction(\'approve\')">✓ Approve</button>' +
+      '<button class="btn btn-danger"  onclick="lightboxAction(\'reject\')">✗ Reject</button>' +
+      '</div>';
+  } else if (tab === "quarantined" && idx != null) {
+    actionsHtml = '<div class="lightbox-actions">' +
+      '<button class="btn btn-success" onclick="lightboxAction(\'approve\')">✓ Restore</button>' +
+      '<button class="btn btn-danger"  onclick="lightboxAction(\'reject\')">✗ Delete</button>' +
+      '</div>';
+  }
+
+  // Nav arrows
+  var prevHtml = (idx != null && idx > 0)
+    ? '<button class="lightbox-nav lightbox-prev" onclick="lightboxNav(-1)">‹</button>' : '';
+  var nextHtml = (idx != null && idx < _lightboxTotal - 1)
+    ? '<button class="lightbox-nav lightbox-next" onclick="lightboxNav(1)">›</button>' : '';
+
+  var name = sheet ? '<div class="lightbox-name">' + escapeHtml(sheet.stem) + '</div>' : '';
+
+  lb.innerHTML =
+    '<div class="lightbox-inner" onclick="event.stopPropagation()">' +
+      prevHtml +
+      '<img src="' + src + '" alt="">' +
+      nextHtml +
+      name +
+      labelsHtml +
+      actionsHtml +
+    '</div>' +
+    '<button class="lightbox-close" onclick="closeLightbox()">✕</button>';
+
+  lb.addEventListener("click", closeLightbox);
   document.body.appendChild(lb);
 }
+
+function closeLightbox() {
+  var lb = document.getElementById("lightbox");
+  if (lb) lb.remove();
+  _lightboxTab = null;
+  _lightboxIdx = null;
+}
+
+function lightboxNav(dir) {
+  if (_lightboxTab == null || _lightboxIdx == null) return;
+  var newIdx = _lightboxIdx + dir;
+  if (newIdx < 0 || newIdx >= _lightboxTotal) return;
+  var sheet = tabSheets[_lightboxTab][newIdx];
+  if (!sheet || !sheet.has_sheet) return;
+  var src = "/api/sheets/image/" + encodeURIComponent(sheet.filename);
+  openLightbox(src, _lightboxTab, newIdx);
+}
+
+async function lightboxAction(action) {
+  if (_lightboxTab == null || _lightboxIdx == null) return;
+  var idx = _lightboxIdx;
+  var tab = _lightboxTab;
+  closeLightbox();
+  if (action === "reject") {
+    confirmSingle(tab, "reject", idx);
+  } else {
+    await singleAction(tab, "approve", idx);
+  }
+}
+
+// Keyboard handler
+document.addEventListener("keydown", function(e) {
+  if (!document.getElementById("lightbox")) return;
+  if (e.key === "Escape")      closeLightbox();
+  if (e.key === "ArrowLeft")   lightboxNav(-1);
+  if (e.key === "ArrowRight")  lightboxNav(1);
+  if (e.key === "a" || e.key === "A") lightboxAction("approve");
+  if (e.key === "r" || e.key === "R") lightboxAction("reject");
+});
 
 function revealImage(el, src) {
   const img     = document.createElement("img");

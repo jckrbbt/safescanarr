@@ -145,6 +145,10 @@ body {
   overflow-x: hidden;
   padding: 16px 0;
   transition: width .2s ease;
+  position: sticky;
+  top: 0;
+  height: calc(100vh - 54px);
+  align-self: flex-start;
 }
 
 .sidebar.collapsed {
@@ -263,6 +267,7 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 28px 28px;
+  min-width: 0;
 }
 
 .page { display: none; }

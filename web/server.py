@@ -259,9 +259,11 @@ def api_test_webhook():
     if not cfg.WEBHOOK_URL:
         return jsonify({"status": "error", "message": "No webhook URL set"}), 400
     payload = json.dumps({
-        "event": "test",
-        "message": "Safe Scanarr webhook test",
-        "timestamp": __import__("datetime").datetime.now().isoformat(),
+        "event":      "test",
+        "path":       "/mnt/media/Movies/Example (2024)/Example (2024).mp4",
+        "confidence": 0.75,
+        "labels":     ["FEMALE_BREAST_EXPOSED"],
+        "timestamp":  __import__("datetime").datetime.now().isoformat(),
     }).encode()
     try:
         req = urllib.request.Request(
