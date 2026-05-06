@@ -168,7 +168,9 @@ function renderTab(tab) {
     const img = card.querySelector(".sheet-img");
     if (img) {
       const src = img.src;
-      img.addEventListener("click", function() { openLightbox(src); });
+      const imgTab = tab;
+      const imgIdx = idx;
+      img.addEventListener("click", function() { openLightbox(src, imgTab, imgIdx); });
     }
     const hidden = card.querySelector(".sheet-img-hidden");
     if (hidden) {
@@ -238,7 +240,6 @@ function renderActions(tab, idx, sheet) {
   if (tab === "pending") {
     return '<div class="sheet-actions">' +
       '<button class="btn btn-success btn-sm" onclick="singleAction(\'pending\',\'approve\',' + idx + ')">✓ Approve</button>' +
-      '<button class="btn btn-warn btn-sm" onclick="singleAction(\'pending\',\'quarantine-single\',' + idx + ')">⚠ Quarantine</button>' +
       '<button class="btn btn-danger btn-sm" onclick="confirmSingle(\'pending\',\'reject\',' + idx + ')">✗ Reject</button>' +
       '</div>';
   }
@@ -533,7 +534,10 @@ async function onGlobalSearch() {
         '</div>';
 
       var img = card.querySelector(".sheet-img");
-      if (img) { var s = img.src; img.addEventListener("click", function() { openLightbox(s); }); }
+      if (img) {
+        var _si = img.src, _st = sec.tab, _sx = idx;
+        img.addEventListener("click", function() { openLightbox(_si, _st, _sx); });
+      }
       var hidden = card.querySelector(".sheet-img-hidden");
       if (hidden) { var s2 = hidden.dataset.src; hidden.addEventListener("click", function() { revealImage(hidden, s2); }); }
 
