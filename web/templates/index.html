@@ -14,58 +14,115 @@
       <span class="nav-version" id="nav-version"></span>
     </div>
     <div class="nav-links">
-      <a href="#" class="nav-link active" data-page="review">Review</a>
-      <a href="#" class="nav-link" data-page="auto-handled">Auto-handled</a>
+      <a href="#" class="nav-link active" data-page="pending">
+        Review <span class="nav-badge" id="badge-pending"></span>
+      </a>
+      <a href="#" class="nav-link" data-page="approved">
+        Approved <span class="nav-badge approved" id="badge-approved"></span>
+      </a>
+      <a href="#" class="nav-link" data-page="quarantined">
+        Quarantine <span class="nav-badge warn" id="badge-quarantined"></span>
+      </a>
+      <a href="#" class="nav-link" data-page="rejected">
+        Rejected <span class="nav-badge danger" id="badge-rejected"></span>
+      </a>
       <a href="#" class="nav-link" data-page="config">Config</a>
-      <a href="#" class="nav-link" data-page="database">Database</a>
       <a href="#" class="nav-link" data-page="logs">Logs</a>
+    </div>
+    <div class="nav-search">
+      <input type="text" id="global-search" placeholder="🔍 Search…" oninput="onGlobalSearch()">
     </div>
   </nav>
 
   <main class="main">
 
-    <!-- ── REVIEW ──────────────────────────────────────────────── -->
-    <div id="page-review" class="page active">
+    <!-- ── PENDING (Review) ────────────────────────────────────── -->
+    <div id="page-pending" class="page active">
       <div class="page-header">
-        <h1>Review Sheets</h1>
+        <h1>Review Queue</h1>
         <div class="header-actions">
-          <span id="review-count" class="badge"></span>
+          <span id="pending-count" class="badge"></span>
           <button class="btn btn-primary" onclick="triggerScan()">▶ Run Scan Now</button>
-          <button class="btn btn-secondary" onclick="loadSheets()">↻ Refresh</button>
+          <button class="btn btn-secondary" onclick="loadPage('pending')">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="review-toolbar" id="pending-toolbar">
+        <div class="bulk-actions" id="bulk-actions-pending" style="display:none">
+          <span id="selected-count-pending" class="badge"></span>
+          <button class="btn btn-success btn-sm" onclick="bulkAction('pending','approve')">✓ Approve</button>
+          <button class="btn btn-warn btn-sm" onclick="bulkAction('pending','quarantine-single')">⚠ Quarantine</button>
+          <button class="btn btn-danger btn-sm" onclick="confirmBulkAction('pending','reject')">✗ Reject</button>
+          <button class="btn btn-secondary btn-sm" id="bulk-select-all-pending" onclick="selectAllVisible('pending')" style="display:none">☑ Select All</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearSelection('pending')">✕ Clear</button>
+        </div>
+        <label class="select-all-label">
+          <input type="checkbox" id="select-all-pending" onchange="toggleSelectAll('pending')"> Select all
+        </label>
+      </div>
+      <div id="pending-empty" class="empty-state" style="display:none"><p>🎉 Nothing to review!</p></div>
+      <div id="pending-grid" class="sheets-grid"></div>
+    </div>
+
+    <!-- ── APPROVED ────────────────────────────────────────────── -->
+    <div id="page-approved" class="page">
+      <div class="page-header">
+        <h1>Approved</h1>
+        <div class="header-actions">
+          <span id="approved-count" class="badge"></span>
+          <button class="btn btn-secondary" onclick="loadPage('approved')">↻ Refresh</button>
         </div>
       </div>
       <div class="review-toolbar">
-        <input type="text" id="review-search" class="input-search" placeholder="🔍 Search sheets…" oninput="filterSheets()">
-        <div class="bulk-actions" id="bulk-actions" style="display:none">
-          <span id="selected-count" class="badge"></span>
-          <button class="btn btn-success btn-sm" onclick="bulkReviewed()">✓ Mark Reviewed</button>
-          <button class="btn btn-danger btn-sm" onclick="confirmBulkDelete()">🗑 Delete Media</button>
-          <button class="btn btn-secondary btn-sm" id="bulk-select-all" onclick="selectAllVisible()" style="display:none">☑ Select All</button>
-          <button class="btn btn-secondary btn-sm" onclick="clearSelection()">✕ Deselect</button>
+        <div class="bulk-actions" id="bulk-actions-approved" style="display:none">
+          <span id="selected-count-approved" class="badge"></span>
+          <button class="btn btn-secondary btn-sm" onclick="bulkAction('approved','requeue')">↻ Re-queue</button>
+          <button class="btn btn-secondary btn-sm" id="bulk-select-all-approved" onclick="selectAllVisible('approved')" style="display:none">☑ Select All</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearSelection('approved')">✕ Clear</button>
         </div>
         <label class="select-all-label">
-          <input type="checkbox" id="select-all" onchange="toggleSelectAll()"> Select all
+          <input type="checkbox" id="select-all-approved" onchange="toggleSelectAll('approved')"> Select all
         </label>
       </div>
-      <div id="sheets-empty" class="empty-state" style="display:none">
-        <p>🎉 Nothing to review!</p>
-      </div>
-      <div id="sheets-grid" class="sheets-grid"></div>
+      <div id="approved-empty" class="empty-state" style="display:none"><p>No approved items yet.</p></div>
+      <div id="approved-grid" class="sheets-grid"></div>
     </div>
 
-    <!-- ── AUTO-HANDLED ────────────────────────────────────────── -->
-    <div id="page-auto-handled" class="page">
+    <!-- ── QUARANTINED ─────────────────────────────────────────── -->
+    <div id="page-quarantined" class="page">
       <div class="page-header">
-        <h1>Auto-handled</h1>
+        <h1>Quarantine</h1>
         <div class="header-actions">
-          <span class="hint">Files automatically processed in Safe Mode</span>
-          <button class="btn btn-secondary" onclick="loadAutoHandled()">↻ Refresh</button>
+          <span id="quarantined-count" class="badge"></span>
+          <button class="btn btn-secondary" onclick="loadPage('quarantined')">↻ Refresh</button>
         </div>
       </div>
-      <div id="auto-handled-empty" class="empty-state" style="display:none">
-        <p>No auto-handled items yet.</p>
+      <div class="review-toolbar">
+        <div class="bulk-actions" id="bulk-actions-quarantined" style="display:none">
+          <span id="selected-count-quarantined" class="badge"></span>
+          <button class="btn btn-success btn-sm" onclick="bulkAction('quarantined','approve')">✓ Approve & Restore</button>
+          <button class="btn btn-danger btn-sm" onclick="confirmBulkAction('quarantined','reject')">✗ Reject & Delete</button>
+          <button class="btn btn-secondary btn-sm" id="bulk-select-all-quarantined" onclick="selectAllVisible('quarantined')" style="display:none">☑ Select All</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearSelection('quarantined')">✕ Clear</button>
+        </div>
+        <label class="select-all-label">
+          <input type="checkbox" id="select-all-quarantined" onchange="toggleSelectAll('quarantined')"> Select all
+        </label>
       </div>
-      <div id="auto-handled-grid" class="sheets-grid"></div>
+      <div id="quarantined-empty" class="empty-state" style="display:none"><p>Quarantine is empty.</p></div>
+      <div id="quarantined-grid" class="sheets-grid"></div>
+    </div>
+
+    <!-- ── REJECTED ────────────────────────────────────────────── -->
+    <div id="page-rejected" class="page">
+      <div class="page-header">
+        <h1>Rejected</h1>
+        <div class="header-actions">
+          <span id="rejected-count" class="badge"></span>
+          <button class="btn btn-secondary" onclick="loadPage('rejected')">↻ Refresh</button>
+        </div>
+      </div>
+      <div id="rejected-empty" class="empty-state" style="display:none"><p>No rejected items.</p></div>
+      <div id="rejected-grid" class="sheets-grid"></div>
     </div>
 
     <!-- ── CONFIG ──────────────────────────────────────────────── -->
@@ -79,53 +136,49 @@
       <div id="config-msg" class="msg" style="display:none"></div>
       <div class="config-form">
 
-        <!-- Scan Mode -->
         <section class="config-section">
-          <h2>🔍 Scan Mode</h2>
-          <p class="hint">Choose how Safe Scanarr responds when NSFW content is detected in a contact sheet.</p>
-          <div class="mode-toggle">
-            <label class="mode-option">
-              <input type="radio" name="scan-mode" value="review" id="mode-review">
-              <span class="mode-label">
-                <span class="mode-title">Review Mode</span>
-                <span class="mode-desc">Every contact sheet is queued for your manual review. Anything flagged as NSFW is sorted to the top and highlighted so you can deal with it first.</span>
-              </span>
-            </label>
-            <label class="mode-option">
-              <input type="radio" name="scan-mode" value="safe" id="mode-safe">
-              <span class="mode-label">
-                <span class="mode-title">Safe Mode</span>
-                <span class="mode-desc">Flagged content is automatically deleted and blocked from being re-downloaded. The contact sheet is saved in the Auto-handled tab so you can audit what was removed.</span>
-              </span>
-            </label>
+          <h2>NSFW Detection</h2>
+          <p class="hint">Every new video is automatically scanned using local on-device detection — no data leaves your server. Results are mapped to zones that determine what happens to each file.</p>
+          <div class="zone-diagram">
+            <div class="zone zone-approve">Auto-approve</div>
+            <div class="zone-arrow">▶</div>
+            <div class="zone zone-review">Review</div>
+            <div class="zone-arrow">▶</div>
+            <div class="zone zone-quarantine">Quarantine</div>
+            <div class="zone-arrow">▶</div>
+            <div class="zone zone-reject">Auto-reject</div>
           </div>
-        </section>
-
-        <!-- NSFW Detection -->
-        <section class="config-section">
-          <h2>🔞 NSFW Detection</h2>
-          <p class="hint">Every contact sheet is automatically scanned for explicit content using NudeNet, which runs entirely on your server — no data is sent anywhere. The confidence threshold controls how certain the detection needs to be before flagging something. A lower threshold catches more content but may occasionally flag innocent material; a higher threshold is more conservative.</p>
-          <label>Detection Threshold</label>
-          <div class="threshold-row">
-            <input type="number" id="cfg-nudenet-threshold" class="input-short" min="0.1" max="1.0" step="0.05">
-            <span class="threshold-hint" id="threshold-hint"></span>
+          <div class="zone-inputs">
+            <div class="zone-input-group">
+              <label>Auto-approve below</label>
+              <input type="number" id="cfg-zone-approve" class="input-short" min="0" max="1" step="0.05">
+              <span class="hint">Below this score → approved automatically, no review</span>
+            </div>
+            <div class="zone-input-group">
+              <label>Quarantine above</label>
+              <input type="number" id="cfg-zone-quarantine" class="input-short" min="0" max="1" step="0.05">
+              <span class="hint">Above this score → video moved to quarantine</span>
+            </div>
+            <div class="zone-input-group">
+              <label>Auto-reject above</label>
+              <input type="number" id="cfg-zone-reject" class="input-short" min="0" max="1" step="0.05">
+              <span class="hint">Above this score → video deleted immediately</span>
+            </div>
           </div>
-          <label style="margin-top:12px">Frames to Sample</label>
-          <p class="hint">Number of frames extracted from each video for analysis. More frames means better coverage but slightly longer processing time. 10 is a good balance.</p>
+          <label style="margin-top:16px">Frames to sample per video</label>
+          <p class="hint">More frames = better coverage, slightly longer processing. 10 is a good default.</p>
           <input type="number" id="cfg-nudenet-frames" class="input-short" min="1" max="30">
         </section>
 
-        <!-- Watch Folders -->
         <section class="config-section">
           <h2>Watch Folders</h2>
-          <p class="hint">One folder per line. Only media in these folders will be scanned and processed.</p>
+          <p class="hint">One folder per line. Only media in these folders will be scanned.</p>
           <textarea id="cfg-watch-folders" rows="4" class="input-full"></textarea>
         </section>
 
-        <!-- Full Scan Schedule -->
         <section class="config-section">
           <h2>Full Scan Schedule</h2>
-          <p class="hint">Automatically scans all watch folders on a schedule, catching anything that may have been missed. Runs independently of polling.</p>
+          <p class="hint">Automatically scans all watch folders on a schedule. Runs independently of polling.</p>
           <div class="toggle-row">
             <label class="toggle-label">Enable scheduled scans</label>
             <label class="toggle-switch">
@@ -142,16 +195,25 @@
           </select>
         </section>
 
-        <!-- Arr Integration -->
+        <section class="config-section">
+          <h2>Quarantine</h2>
+          <p class="hint">Files flagged above the quarantine threshold are moved here rather than deleted immediately. You can approve (restore) or reject (delete) them from the Quarantine tab.</p>
+          <label>Quarantine Folder</label>
+          <input type="text" id="cfg-quarantine-dir" class="input-full" placeholder="Leave blank to use default (data/quarantine)">
+          <label style="margin-top:12px">Auto-reject after (days)</label>
+          <p class="hint">Quarantined items older than this are automatically rejected. Set to 0 to skip quarantine entirely and reject immediately.</p>
+          <input type="number" id="cfg-quarantine-days" class="input-short" min="0">
+        </section>
+
         <section class="config-section">
           <h2>Arr Integration</h2>
           <p class="hint">Connect Sonarr and Radarr so Safe Scanarr can detect new imports in near real-time and remove media from their libraries when needed. At least one API key must be set to enable polling.</p>
 
           <div class="arr-subsection">
             <h3>Poller</h3>
-            <p class="hint">When enabled, Safe Scanarr checks Sonarr and Radarr for newly imported files at the interval below, rather than waiting for a scheduled scan.</p>
+            <p class="hint">Checks Sonarr and Radarr for newly imported files at the interval below.</p>
             <div class="toggle-row">
-              <label class="toggle-label" id="polling-toggle-label">Enable polling</label>
+              <label class="toggle-label">Enable polling</label>
               <label class="toggle-switch">
                 <input type="checkbox" id="cfg-polling-enabled">
                 <span class="toggle-slider"></span>
@@ -165,12 +227,10 @@
           </div>
 
           <div class="arr-divider"></div>
-
           <div class="arr-subsection">
             <h3>Sonarr</h3>
             <label>URL</label>
-            <input type="text" id="cfg-sonarr-url" class="input-full" placeholder="http://localhost:8989"
-                   oninput="checkArrKeys()">
+            <input type="text" id="cfg-sonarr-url" class="input-full" placeholder="http://localhost:8989" oninput="checkArrKeys()">
             <label>API Key</label>
             <div class="input-row">
               <input type="text" id="cfg-sonarr-key" class="input-full" oninput="checkArrKeys()">
@@ -180,12 +240,10 @@
           </div>
 
           <div class="arr-divider"></div>
-
           <div class="arr-subsection">
             <h3>Radarr</h3>
             <label>URL</label>
-            <input type="text" id="cfg-radarr-url" class="input-full" placeholder="http://localhost:7878"
-                   oninput="checkArrKeys()">
+            <input type="text" id="cfg-radarr-url" class="input-full" placeholder="http://localhost:7878" oninput="checkArrKeys()">
             <label>API Key</label>
             <div class="input-row">
               <input type="text" id="cfg-radarr-key" class="input-full" oninput="checkArrKeys()">
@@ -195,56 +253,44 @@
           </div>
         </section>
 
-        <!-- vcsi -->
+        <section class="config-section">
+          <h2>Webhook Notifications</h2>
+          <p class="hint">Send a POST notification to a URL when items are quarantined or rejected. Works with Discord, Slack, Ntfy, Gotify, Home Assistant, or any service that accepts a JSON POST.</p>
+          <label>Webhook URL</label>
+          <div class="input-row">
+            <input type="text" id="cfg-webhook-url" class="input-full" placeholder="https://...">
+            <button class="btn btn-secondary" onclick="testWebhook()" id="test-webhook-btn">Test</button>
+          </div>
+          <div id="test-webhook-result" class="test-result"></div>
+          <div style="margin-top:12px;display:flex;gap:20px">
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-webhook-quarantine"> Notify on quarantine
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-webhook-reject"> Notify on reject
+            </label>
+          </div>
+        </section>
+
         <section class="config-section">
           <h2>vcsi</h2>
-          <p class="hint">vcsi generates the contact sheet thumbnails from your video files. Grid size controls how many thumbnails appear (e.g. 4x4 = 16 frames). Timeout is the maximum time allowed per file — increase this for large or slow-to-process files.</p>
-          <label>Grid Size (e.g. 4x4)</label>
-          <input type="text" id="cfg-vcs-grid" class="input-short">
-          <label>Timeout (seconds)</label>
+          <p class="hint">vcsi generates the contact sheet thumbnails. Grid size controls thumbnail count (4x4 = 16 frames). Quality affects file size — 80 is a good balance between quality and storage.</p>
+          <label>Grid Size</label>
+          <input type="text" id="cfg-vcs-grid" class="input-short" placeholder="4x4">
+          <label style="margin-top:12px">JPEG Quality (1–95)</label>
+          <input type="number" id="cfg-vcs-quality" class="input-short" min="1" max="95">
+          <label style="margin-top:12px">Timeout (seconds)</label>
           <input type="number" id="cfg-vcsi-timeout" class="input-short" min="30">
         </section>
 
-        <!-- Database -->
         <section class="config-section">
           <h2>Database</h2>
-          <p class="hint">Clean Database removes records for files that no longer exist on disk or are outside your current watch folders. Useful after moving or deleting media, or after changing watch folders.</p>
+          <p class="hint">Clean Database removes records for files that no longer exist on disk or are outside your watch folders.</p>
           <button class="btn btn-secondary" onclick="cleanDatabase()">🧹 Clean Database</button>
           <div id="clean-db-result" class="test-result" style="margin-top:8px"></div>
         </section>
 
       </div>
-    </div>
-
-    <!-- ── DATABASE ────────────────────────────────────────────── -->
-    <div id="page-database" class="page">
-      <div class="page-header">
-        <h1>Database</h1>
-        <div class="header-actions">
-          <div id="db-stats" class="db-stats"></div>
-          <input type="text" id="db-search" placeholder="Search path…" class="input-search" oninput="loadDb()">
-          <select id="db-status-filter" class="select" onchange="loadDb()">
-            <option value="">All</option>
-            <option value="ok">OK</option>
-            <option value="error">Errors</option>
-          </select>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="db-table">
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Filename</th>
-              <th>Path</th>
-              <th>Last Updated</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="db-tbody"></tbody>
-        </table>
-      </div>
-      <div class="pagination" id="db-pagination"></div>
     </div>
 
     <!-- ── LOGS ────────────────────────────────────────────────── -->
@@ -255,6 +301,7 @@
           <select id="log-level" class="select" onchange="loadLogs()">
             <option value="">All</option>
             <option value="ERROR">Errors only</option>
+            <option value="WARNING">Warnings+</option>
             <option value="INFO">Info+</option>
           </select>
           <input type="number" id="log-lines" value="200" min="50" max="2000" class="input-short" onchange="loadLogs()">

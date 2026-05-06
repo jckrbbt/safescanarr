@@ -1,546 +1,455 @@
-/* ── Safe Scanarr UI ──────────────────────────────────────────── */
+/* ── Safe Scanarr v0.6 ────────────────────────────────────────── */
 
-let currentPage = 'review';
-let dbPage = 1;
-let allSheets = [];
-let selectedStems = new Set();
+const TABS     = ["pending", "approved", "quarantined", "rejected"];
+let currentTab = "pending";
+let tabSheets  = {};        // { tabName: [{...}] }
+let selections = {};        // { tabName: Set<stem> }
+let statsTimer = null;
 
-document.addEventListener('DOMContentLoaded', () => {
+TABS.forEach(t => {
+  tabSheets[t]  = [];
+  selections[t] = new Set();
+});
+
+document.addEventListener("DOMContentLoaded", () => {
   loadVersion();
-  navigateTo('review');
-  document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', e => {
+  loadStats();
+  navigateTo("pending");
+  statsTimer = setInterval(loadStats, 60000);
+
+  document.querySelectorAll(".nav-link").forEach(link => {
+    link.addEventListener("click", e => {
       e.preventDefault();
       navigateTo(link.dataset.page);
     });
   });
 });
 
+// ── Navigation ────────────────────────────────────────────────────
 function navigateTo(page) {
-  currentPage = page;
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-  document.getElementById(`page-${page}`).classList.add('active');
-  document.querySelector(`[data-page="${page}"]`).classList.add('active');
-  if (page === 'review')       loadSheets();
-  if (page === 'auto-handled') loadAutoHandled();
-  if (page === 'config')       loadConfig();
-  if (page === 'database')     { dbPage = 1; loadDb(); loadDbStats(); }
-  if (page === 'logs')         loadLogs();
+  currentTab = page;
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".nav-link").forEach(l => l.classList.remove("active"));
+  const pageEl = document.getElementById(`page-${page}`);
+  const linkEl = document.querySelector(`[data-page="${page}"]`);
+  if (pageEl) pageEl.classList.add("active");
+  if (linkEl) linkEl.classList.add("active");
+
+  if (TABS.includes(page)) loadPage(page);
+  if (page === "config")   loadConfig();
+  if (page === "logs")     loadLogs();
 }
 
 // ── Version ───────────────────────────────────────────────────────
 async function loadVersion() {
-  const res = await fetch('/api/version');
+  const res = await fetch("/api/version");
   const d   = await res.json();
-  document.getElementById('nav-version').textContent = 'v' + d.version;
+  document.getElementById("nav-version").textContent = "v" + d.version;
 }
 
-// ── Review ────────────────────────────────────────────────────────
-async function loadSheets() {
-  const res = await fetch('/api/sheets');
-  allSheets = await res.json();
-  selectedStems.clear();
-  window._sheetStems = {};
-  updateBulkBar();
-  renderSheets(allSheets);
+// ── Stats ─────────────────────────────────────────────────────────
+async function loadStats() {
+  const res   = await fetch("/api/stats");
+  const stats = await res.json();
+  TABS.forEach(t => {
+    const badge = document.getElementById(`badge-${t}`);
+    const count = document.getElementById(`${t}-count`);
+    const n = stats[t] || 0;
+    if (badge) badge.textContent = n > 0 ? n : "";
+    if (count) count.textContent = `${n} item${n !== 1 ? "s" : ""}`;
+  });
 }
 
-function filterSheets() {
-  const q        = document.getElementById('review-search').value.toLowerCase();
-  const filtered = q ? allSheets.filter(s => s.stem.toLowerCase().includes(q)) : allSheets;
-  renderSheets(filtered);
+// ── Load a tab ────────────────────────────────────────────────────
+async function loadPage(tab) {
+  const search = document.getElementById("global-search")?.value?.toLowerCase() || "";
+  const res    = await fetch(`/api/sheets?state=${tab}&search=${encodeURIComponent(search)}`);
+  tabSheets[tab] = await res.json();
+  selections[tab].clear();
+  renderTab(tab);
+  updateBulkBar(tab);
 }
 
-function renderSheets(sheets) {
-  const grid  = document.getElementById('sheets-grid');
-  const empty = document.getElementById('sheets-empty');
-  document.getElementById('review-count').textContent = `${allSheets.length} pending`;
-  grid.innerHTML  = '';
-  window._sheetStems = {};
+function renderTab(tab) {
+  const grid  = document.getElementById(`${tab}-grid`);
+  const empty = document.getElementById(`${tab}-empty`);
+  if (!grid) return;
+  grid.innerHTML = "";
+  window._stems  = window._stems || {};
+  window._stems[tab] = {};
 
+  const sheets = tabSheets[tab];
   if (sheets.length === 0) {
-    empty.style.display = 'block';
+    if (empty) empty.style.display = "block";
     return;
   }
-  empty.style.display = 'none';
+  if (empty) empty.style.display = "none";
 
   sheets.forEach((sheet, idx) => {
-    window._sheetStems[idx] = sheet.stem;
-
-    const card     = document.createElement('div');
-    card.className = 'sheet-card' + (selectedStems.has(sheet.stem) ? ' selected' : '');
+    window._stems[tab][idx] = sheet.stem;
+    const card = document.createElement("div");
+    card.className = "sheet-card" + (sheet.flagged ? " flagged" : "") +
+                     (selections[tab].has(sheet.stem) ? " selected" : "");
     card.dataset.stem = sheet.stem;
 
-    const srcPath  = sheet.source_path || 'Unknown source';
-    const checked  = selectedStems.has(sheet.stem) ? 'checked' : '';
-    const flagBadge = sheet.flagged
-      ? `<span class="flag-badge" title="${sheet.flag_reason || 'NSFW detected'}">⚠ NSFW</span>`
-      : '';
-    if (sheet.flagged) card.classList.add('flagged');
+    const conf    = sheet.nsfw_confidence != null
+                  ? `<span class="conf-badge">${Math.round(sheet.nsfw_confidence * 100)}%</span>` : "";
+    const checked = selections[tab].has(sheet.stem) ? "checked" : "";
+    const imgSrc  = sheet.has_sheet
+                  ? `/api/sheets/image/${encodeURIComponent(sheet.filename)}`
+                  : null;
 
     card.innerHTML = `
       <div class="sheet-select">
-        <input type="checkbox" class="sheet-checkbox" data-idx="${idx}" ${checked}
-               onchange="toggleSelectByIdx(${idx}, this.checked)">
+        <input type="checkbox" class="sheet-checkbox" data-tab="${tab}" data-idx="${idx}" ${checked}
+               onchange="toggleSelectByIdx('${tab}', ${idx}, this.checked)">
       </div>
-      ${sheet.flagged ? '<div class="flagged-overlay">⚠ NSFW DETECTED</div>' : ''}
-      <img class="sheet-img"
-           src="/api/sheets/image/${encodeURIComponent(sheet.filename)}"
-           alt="" onclick="openLightbox(this.src)" loading="lazy">
+      ${sheet.flagged ? '<div class="flagged-overlay">⚠ NSFW</div>' : ""}
+      ${imgSrc
+        ? `<img class="sheet-img" src="${imgSrc}" alt="" onclick="openLightbox(this.src)" loading="lazy">`
+        : `<div class="sheet-img-placeholder">No sheet</div>`}
       <div class="sheet-info">
-        <div class="sheet-name" title="${sheet.stem}">${flagBadge}${sheet.stem}</div>
-        <div class="sheet-path" title="${srcPath}">${srcPath}</div>
-        <div class="sheet-actions">
-          <button class="btn btn-success btn-sm" onclick="markReviewedByIdx(${idx})">✓ Reviewed</button>
-          <button class="btn btn-danger btn-sm" onclick="confirmDeleteByIdx(${idx})">🗑 Delete Media</button>
-        </div>
+        <div class="sheet-name">${conf}${sheet.stem}</div>
+        <div class="sheet-path" title="${sheet.source_path || ""}">${sheet.source_path || "Unknown"}</div>
+        ${renderActions(tab, idx, sheet)}
       </div>`;
     grid.appendChild(card);
   });
 }
 
-// ── Selection ─────────────────────────────────────────────────────
-function toggleSelectByIdx(idx, checked) {
-  toggleSelect(window._sheetStems[idx], checked);
+function renderActions(tab, idx, sheet) {
+  if (tab === "pending") return `
+    <div class="sheet-actions">
+      <button class="btn btn-success btn-sm" onclick="singleAction('pending','approve',${idx})">✓ Approve</button>
+      <button class="btn btn-warn btn-sm" onclick="singleAction('pending','quarantine-single',${idx})">⚠ Quarantine</button>
+      <button class="btn btn-danger btn-sm" onclick="confirmSingle('pending','reject',${idx})">✗ Reject</button>
+    </div>`;
+  if (tab === "approved") return `
+    <div class="sheet-actions">
+      <button class="btn btn-secondary btn-sm" onclick="singleAction('approved','requeue',${idx})">↻ Re-queue</button>
+    </div>`;
+  if (tab === "quarantined") return `
+    <div class="sheet-actions">
+      <button class="btn btn-success btn-sm" onclick="singleAction('quarantined','approve',${idx})">✓ Restore</button>
+      <button class="btn btn-danger btn-sm" onclick="confirmSingle('quarantined','reject',${idx})">✗ Delete</button>
+    </div>`;
+  if (tab === "rejected") return `
+    <div class="sheet-info-meta">
+      <span class="meta-time">${sheet.state_updated_at ? new Date(sheet.state_updated_at).toLocaleString() : ""}</span>
+    </div>`;
+  return "";
 }
 
-function toggleSelect(stem, checked) {
-  if (checked) selectedStems.add(stem);
-  else         selectedStems.delete(stem);
-  const card = document.querySelector(`.sheet-card[data-stem="${CSS.escape(stem)}"]`);
-  if (card) card.classList.toggle('selected', checked);
-  updateBulkBar();
+// ── Actions ───────────────────────────────────────────────────────
+async function singleAction(tab, action, idx) {
+  const stem = window._stems[tab][idx];
+  await performAction(action, [stem]);
+  await loadPage(tab);
+  await loadStats();
 }
 
-function toggleSelectAll() {
-  const checked = document.getElementById('select-all').checked;
-  document.querySelectorAll('.sheet-checkbox').forEach(cb => {
-    cb.checked = checked;
-    toggleSelectByIdx(parseInt(cb.dataset.idx), checked);
-  });
+function confirmSingle(tab, action, idx) {
+  const stem = window._stems[tab][idx];
+  showModal(
+    action === "reject" ? "Reject & Delete?" : "Confirm",
+    `This will permanently delete the source video for "${stem}". This cannot be undone.`,
+    async () => { closeModal(); await singleAction(tab, action, idx); }
+  );
 }
 
-function selectAllVisible() {
-  document.querySelectorAll('.sheet-checkbox').forEach(cb => {
-    cb.checked = true;
-    toggleSelectByIdx(parseInt(cb.dataset.idx), true);
-  });
-  document.getElementById('select-all').checked = true;
+async function bulkAction(tab, action) {
+  const stems = [...selections[tab]];
+  if (!stems.length) return;
+  await performAction(action, stems);
+  await loadPage(tab);
+  await loadStats();
+  clearSelection(tab);
 }
 
-function clearSelection() {
-  selectedStems.clear();
-  document.querySelectorAll('.sheet-checkbox').forEach(cb => cb.checked = false);
-  document.getElementById('select-all').checked = false;
-  document.querySelectorAll('.sheet-card').forEach(c => c.classList.remove('selected'));
-  updateBulkBar();
+function confirmBulkAction(tab, action) {
+  const n = selections[tab].size;
+  if (!n) return;
+  showModal(
+    `${action === "reject" ? "Reject" : "Confirm"} ${n} item${n > 1 ? "s" : ""}?`,
+    `This will permanently delete ${n} source video file${n > 1 ? "s" : ""}. This cannot be undone.`,
+    async () => { closeModal(); await bulkAction(tab, action); }
+  );
 }
 
-function updateBulkBar() {
-  const bar   = document.getElementById('bulk-actions');
-  const count = document.getElementById('selected-count');
-  const total = document.querySelectorAll('.sheet-card').length;
-  if (selectedStems.size > 0) {
-    bar.style.display = 'flex';
-    count.textContent = `${selectedStems.size} selected`;
-    const selectAllBtn = document.getElementById('bulk-select-all');
-    if (selectAllBtn) selectAllBtn.style.display = selectedStems.size < total ? 'inline-flex' : 'none';
-  } else {
-    bar.style.display = 'none';
-  }
-}
+async function performAction(action, stems) {
+  const endpoints = {
+    "approve":          "/api/sheets/approve",
+    "reject":           "/api/sheets/reject",
+    "quarantine-single":"/api/sheets/quarantine",
+    "requeue":          "/api/sheets/requeue",
+  };
 
-// ── Bulk actions ──────────────────────────────────────────────────
-async function bulkReviewed() {
-  const stems = [...selectedStems];
-  const res   = await fetch('/api/sheets/bulk-reviewed', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify({stems}),
-  });
-  if (res.ok) {
+  const url = endpoints[action];
+  if (!url) return;
+
+  if (action === "quarantine-single") {
+    // Single item only
+    const res  = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({stem: stems[0]}),
+    });
     const data = await res.json();
-    data.reviewed.forEach(stem => removeCardByStem(stem));
-    selectedStems.clear();
-    updateBulkBar();
-    toast(`${data.reviewed.length} sheets marked reviewed ✓`);
-  } else {
-    toast('Error marking reviewed', true);
+    if (res.ok) toast("Moved to quarantine ⚠");
+    else toast("Error: " + (data.message || "unknown"), true);
+    return;
   }
-}
 
-function confirmBulkDelete() {
-  const n = selectedStems.size;
-  showModal(
-    `Delete ${n} Media File${n > 1 ? 's' : ''}?`,
-    `This will permanently delete ${n} source video file${n > 1 ? 's' : ''} and tell Sonarr/Radarr to find alternatives. This cannot be undone.`,
-    bulkDeleteMedia
-  );
-}
-
-async function bulkDeleteMedia() {
-  closeModal();
-  const stems = [...selectedStems];
-  const res   = await fetch('/api/sheets/bulk-delete-media', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify({stems}),
-  });
-  if (res.ok) {
-    stems.forEach(stem => removeCardByStem(stem));
-    selectedStems.clear();
-    updateBulkBar();
-    toast(`${stems.length} media file${stems.length > 1 ? 's' : ''} deleted ✓`);
+  if (action === "requeue") {
+    for (const stem of stems) {
+      const res  = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({stem}),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast("Error: " + (data.message || "unknown"), true); return; }
+    }
+    toast("Re-queued ✓ — check Review shortly");
+    return;
   }
-}
 
-// ── Single sheet actions ──────────────────────────────────────────
-async function markReviewed(stem) {
-  const res = await fetch('/api/sheets/reviewed', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify({stem}),
-  });
-  if (res.ok) { removeCardByStem(stem); toast('Marked as reviewed ✓'); }
-  else toast('Error marking reviewed', true);
-}
-
-function markReviewedByIdx(idx) { markReviewed(window._sheetStems[idx]); }
-
-function confirmDeleteByIdx(idx) {
-  const stem = window._sheetStems[idx];
-  showModal(
-    'Delete Media?',
-    `This will permanently delete the source video for "${stem}" and tell Sonarr/Radarr to find an alternative. This cannot be undone.`,
-    () => deleteMedia(stem)
-  );
-}
-
-async function deleteMedia(stem) {
-  closeModal();
-  const res  = await fetch('/api/sheets/delete-media', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify({stem}),
+  const res  = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({stems}),
   });
   const data = await res.json();
-  if (res.ok) { removeCardByStem(stem); toast('Media deleted ✓'); }
-  else toast('Error: ' + (data.message || 'unknown'), true);
-}
-
-function removeCardByStem(stem) {
-  allSheets = allSheets.filter(s => s.stem !== stem);
-  selectedStems.delete(stem);
-  const card = document.querySelector(`.sheet-card[data-stem="${CSS.escape(stem)}"]`);
-  if (card) {
-    card.style.transition = 'opacity .3s';
-    card.style.opacity    = '0';
-    setTimeout(() => {
-      card.remove();
-      document.getElementById('review-count').textContent = `${allSheets.length} pending`;
-      if (document.querySelectorAll('.sheet-card').length === 0)
-        document.getElementById('sheets-empty').style.display = 'block';
-    }, 300);
+  if (res.ok) {
+    const labels = {"approve": "Approved ✓", "reject": "Rejected ✗"};
+    toast((labels[action] || "Done") + ` (${stems.length})`);
+  } else {
+    toast("Error: " + (data.message || "unknown"), true);
   }
-  updateBulkBar();
 }
 
 async function triggerScan() {
-  await fetch('/api/scan', {method: 'POST'});
-  toast('Scan started — check Logs for progress');
+  await fetch("/api/scan", {method: "POST"});
+  toast("Scan started — check Logs for progress");
 }
 
-// ── Auto-handled ──────────────────────────────────────────────────
-async function loadAutoHandled() {
-  const res   = await fetch('/api/auto-handled');
-  const items = await res.json();
-  const grid  = document.getElementById('auto-handled-grid');
-  const empty = document.getElementById('auto-handled-empty');
-  grid.innerHTML = '';
+// ── Selection ─────────────────────────────────────────────────────
+function toggleSelectByIdx(tab, idx, checked) {
+  const stem = window._stems[tab][idx];
+  if (checked) selections[tab].add(stem);
+  else         selections[tab].delete(stem);
+  const card = document.querySelector(`#${tab}-grid .sheet-card[data-stem="${CSS.escape(stem)}"]`);
+  if (card) card.classList.toggle("selected", checked);
+  updateBulkBar(tab);
+}
 
-  if (items.length === 0) {
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-
-  items.forEach(item => {
-    const card = document.createElement('div');
-    card.className = 'sheet-card auto-handled-card';
-    const ts = new Date(item.handled_at).toLocaleString();
-    const confidence = item.confidence ? `${Math.round(item.confidence * 100)}%` : 'N/A';
-    const imgSrc = item.has_sheet
-      ? `/api/auto-handled/image/${encodeURIComponent(item.sheet_name)}`
-      : '';
-
-    card.innerHTML = `
-      ${imgSrc ? `<img class="sheet-img" src="${imgSrc}" alt="" onclick="openLightbox(this.src)" loading="lazy">` : '<div class="sheet-img-placeholder">No sheet</div>'}
-      <div class="sheet-info">
-        <div class="sheet-name">${item.name}</div>
-        <div class="sheet-path" title="${item.path}">${item.path}</div>
-        <div class="auto-meta">
-          <span class="badge-danger">Flagged</span>
-          <span class="auto-reason">${item.reason || 'NSFW detected'}</span>
-          <span class="auto-confidence">Confidence: ${confidence}</span>
-          <span class="auto-time">${ts}</span>
-        </div>
-        <div class="sheet-actions">
-          <button class="btn btn-secondary btn-sm" onclick="dismissAutoHandled(${item.id})">✕ Dismiss</button>
-        </div>
-      </div>`;
-    grid.appendChild(card);
+function toggleSelectAll(tab) {
+  const checked = document.getElementById(`select-all-${tab}`).checked;
+  document.querySelectorAll(`#${tab}-grid .sheet-checkbox`).forEach(cb => {
+    cb.checked = checked;
+    toggleSelectByIdx(tab, parseInt(cb.dataset.idx), checked);
   });
 }
 
-async function dismissAutoHandled(id) {
-  const res = await fetch(`/api/auto-handled/${id}/dismiss`, {method: 'POST'});
-  if (res.ok) { loadAutoHandled(); toast('Dismissed ✓'); }
-  else toast('Error dismissing', true);
+function selectAllVisible(tab) {
+  document.querySelectorAll(`#${tab}-grid .sheet-checkbox`).forEach(cb => {
+    cb.checked = true;
+    toggleSelectByIdx(tab, parseInt(cb.dataset.idx), true);
+  });
+  const sa = document.getElementById(`select-all-${tab}`);
+  if (sa) sa.checked = true;
+}
+
+function clearSelection(tab) {
+  selections[tab].clear();
+  document.querySelectorAll(`#${tab}-grid .sheet-checkbox`).forEach(cb => cb.checked = false);
+  const sa = document.getElementById(`select-all-${tab}`);
+  if (sa) sa.checked = false;
+  document.querySelectorAll(`#${tab}-grid .sheet-card`).forEach(c => c.classList.remove("selected"));
+  updateBulkBar(tab);
+}
+
+function updateBulkBar(tab) {
+  const bar   = document.getElementById(`bulk-actions-${tab}`);
+  const count = document.getElementById(`selected-count-${tab}`);
+  const saBtn = document.getElementById(`bulk-select-all-${tab}`);
+  const total = tabSheets[tab].length;
+  const n     = selections[tab].size;
+  if (!bar) return;
+  if (n > 0) {
+    bar.style.display = "flex";
+    if (count) count.textContent = `${n} selected`;
+    if (saBtn) saBtn.style.display = n < total ? "inline-flex" : "none";
+  } else {
+    bar.style.display = "none";
+  }
+}
+
+// ── Global search ─────────────────────────────────────────────────
+function onGlobalSearch() {
+  if (TABS.includes(currentTab)) loadPage(currentTab);
 }
 
 // ── Config ────────────────────────────────────────────────────────
 async function loadConfig() {
-  const res = await fetch('/api/config');
+  const res = await fetch("/api/config");
   const cfg = await res.json();
 
-  // Scan mode
-  const modeVal = cfg.scan_mode || 'review';
-  document.querySelector(`input[name="scan-mode"][value="${modeVal}"]`).checked = true;
-
-  document.getElementById('cfg-watch-folders').value  = (cfg.watch_folders || []).join('\n');
-  document.getElementById('cfg-sonarr-url').value     = cfg.sonarr_url    || '';
-  document.getElementById('cfg-sonarr-key').value     = cfg.sonarr_api_key || '';
-  document.getElementById('cfg-radarr-url').value     = cfg.radarr_url    || '';
-  document.getElementById('cfg-radarr-key').value     = cfg.radarr_api_key || '';
-  document.getElementById('cfg-polling-enabled').checked   = !!cfg.polling_enabled;
-  document.getElementById('cfg-scan-schedule-enabled').checked = !!cfg.scan_schedule_enabled;
-  document.getElementById('cfg-scan-schedule').value            = cfg.scan_schedule || 'daily';
-  document.getElementById('cfg-nudenet-threshold').value  = cfg.nudenet_threshold ?? 0.6;
-  document.getElementById('cfg-nudenet-frames').value      = cfg.nudenet_frames ?? 10;
-  document.getElementById('cfg-nudenet-threshold').addEventListener('input', updateThresholdHint);
-  updateThresholdHint();
+  document.getElementById("cfg-zone-approve").value        = cfg.zone_auto_approve ?? 0.1;
+  document.getElementById("cfg-zone-quarantine").value     = cfg.zone_quarantine   ?? 0.4;
+  document.getElementById("cfg-zone-reject").value         = cfg.zone_auto_reject  ?? 0.85;
+  document.getElementById("cfg-nudenet-frames").value      = cfg.nudenet_frames    ?? 10;
+  document.getElementById("cfg-watch-folders").value       = (cfg.watch_folders || []).join("\n");
+  document.getElementById("cfg-scan-schedule-enabled").checked = !!cfg.scan_schedule_enabled;
+  document.getElementById("cfg-scan-schedule").value       = cfg.scan_schedule     || "daily";
+  document.getElementById("cfg-quarantine-dir").value      = cfg.quarantine_dir    || "";
+  document.getElementById("cfg-quarantine-days").value     = cfg.quarantine_auto_reject_days ?? 0;
+  document.getElementById("cfg-polling-enabled").checked   = !!cfg.polling_enabled;
+  document.getElementById("cfg-poll-interval").value       = cfg.poll_interval_seconds || 600;
+  document.getElementById("cfg-sonarr-url").value          = cfg.sonarr_url        || "";
+  document.getElementById("cfg-sonarr-key").value          = cfg.sonarr_api_key    || "";
+  document.getElementById("cfg-radarr-url").value          = cfg.radarr_url        || "";
+  document.getElementById("cfg-radarr-key").value          = cfg.radarr_api_key    || "";
+  document.getElementById("cfg-webhook-url").value         = cfg.webhook_url       || "";
+  document.getElementById("cfg-webhook-quarantine").checked= !!cfg.webhook_on_quarantine;
+  document.getElementById("cfg-webhook-reject").checked    = !!cfg.webhook_on_reject;
+  document.getElementById("cfg-vcs-grid").value            = cfg.vcs_grid          || "4x4";
+  document.getElementById("cfg-vcs-quality").value         = cfg.vcs_quality       ?? 80;
+  document.getElementById("cfg-vcsi-timeout").value        = cfg.vcsi_timeout_seconds || 300;
   checkArrKeys();
-  document.getElementById('cfg-poll-interval').value  = cfg.poll_interval_seconds || 600;
-  document.getElementById('cfg-vcs-grid').value       = cfg.vcs_grid      || '4x4';
-  document.getElementById('cfg-vcsi-timeout').value   = cfg.vcsi_timeout_seconds || 300;
-}
-
-function updateThresholdHint() {
-  const val  = parseFloat(document.getElementById('cfg-nudenet-threshold').value) || 0.6;
-  const hint = document.getElementById('threshold-hint');
-  if (!hint) return;
-  if (val <= 0.4)      hint.textContent = 'Very sensitive — may flag innocent content';
-  else if (val <= 0.55) hint.textContent = 'Sensitive — catches more, some false positives possible';
-  else if (val <= 0.65) hint.textContent = 'Balanced (recommended)';
-  else if (val <= 0.75) hint.textContent = 'Conservative — fewer false positives';
-  else                  hint.textContent = 'Very conservative — only flags high-confidence detections';
-}
-
-function checkArrKeys() {
-  const sonarrKey  = document.getElementById('cfg-sonarr-key').value.trim();
-  const radarrKey  = document.getElementById('cfg-radarr-key').value.trim();
-  const hasKeys    = sonarrKey.length > 0 || radarrKey.length > 0;
-  const toggle     = document.getElementById('cfg-polling-enabled');
-  const noKeyHint  = document.getElementById('polling-no-keys-hint');
-
-  if (!hasKeys) {
-    toggle.disabled    = true;
-    toggle.checked     = false;
-    noKeyHint.style.display = 'block';
-  } else {
-    toggle.disabled    = false;
-    noKeyHint.style.display = 'none';
-  }
 }
 
 async function saveConfig() {
-  const folders  = document.getElementById('cfg-watch-folders').value
-    .split('\n').map(s => s.trim()).filter(Boolean);
-  const scanMode = document.querySelector('input[name="scan-mode"]:checked')?.value || 'review';
+  const folders = document.getElementById("cfg-watch-folders").value
+    .split("\n").map(s => s.trim()).filter(Boolean);
 
   const payload = {
-    scan_mode:             scanMode,
-    watch_folders:         folders,
-    sonarr_url:            document.getElementById('cfg-sonarr-url').value.trim(),
-    sonarr_api_key:        document.getElementById('cfg-sonarr-key').value.trim(),
-    radarr_url:            document.getElementById('cfg-radarr-url').value.trim(),
-    radarr_api_key:        document.getElementById('cfg-radarr-key').value.trim(),
-    polling_enabled:       document.getElementById('cfg-polling-enabled').checked,
-    nudenet_threshold:     parseFloat(document.getElementById('cfg-nudenet-threshold').value),
-    nudenet_frames:        parseInt(document.getElementById('cfg-nudenet-frames').value),
-    poll_interval_seconds: parseInt(document.getElementById('cfg-poll-interval').value),
-    scan_schedule_enabled: document.getElementById('cfg-scan-schedule-enabled').checked,
-    scan_schedule:         document.getElementById('cfg-scan-schedule').value,
-    vcs_grid:              document.getElementById('cfg-vcs-grid').value.trim(),
-    vcsi_timeout_seconds:  parseInt(document.getElementById('cfg-vcsi-timeout').value),
+    zone_auto_approve:          parseFloat(document.getElementById("cfg-zone-approve").value),
+    zone_quarantine:            parseFloat(document.getElementById("cfg-zone-quarantine").value),
+    zone_auto_reject:           parseFloat(document.getElementById("cfg-zone-reject").value),
+    nudenet_frames:             parseInt(document.getElementById("cfg-nudenet-frames").value),
+    watch_folders:              folders,
+    scan_schedule_enabled:      document.getElementById("cfg-scan-schedule-enabled").checked,
+    scan_schedule:              document.getElementById("cfg-scan-schedule").value,
+    quarantine_dir:             document.getElementById("cfg-quarantine-dir").value.trim(),
+    quarantine_auto_reject_days:parseInt(document.getElementById("cfg-quarantine-days").value),
+    polling_enabled:            document.getElementById("cfg-polling-enabled").checked,
+    poll_interval_seconds:      parseInt(document.getElementById("cfg-poll-interval").value),
+    sonarr_url:                 document.getElementById("cfg-sonarr-url").value.trim(),
+    sonarr_api_key:             document.getElementById("cfg-sonarr-key").value.trim(),
+    radarr_url:                 document.getElementById("cfg-radarr-url").value.trim(),
+    radarr_api_key:             document.getElementById("cfg-radarr-key").value.trim(),
+    webhook_url:                document.getElementById("cfg-webhook-url").value.trim(),
+    webhook_on_quarantine:      document.getElementById("cfg-webhook-quarantine").checked,
+    webhook_on_reject:          document.getElementById("cfg-webhook-reject").checked,
+    vcs_grid:                   document.getElementById("cfg-vcs-grid").value.trim(),
+    vcs_quality:                parseInt(document.getElementById("cfg-vcs-quality").value),
+    vcsi_timeout_seconds:       parseInt(document.getElementById("cfg-vcsi-timeout").value),
   };
 
-  const res = await fetch('/api/config', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify(payload),
+  const res = await fetch("/api/config", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload),
   });
-
-  const msg = document.getElementById('config-msg');
+  const msg = document.getElementById("config-msg");
   if (res.ok) {
-    msg.className   = 'msg success';
-    msg.textContent = '✓ Configuration saved.';
+    msg.className   = "msg success";
+    msg.textContent = "✓ Configuration saved.";
   } else {
     const d = await res.json();
-    msg.className   = 'msg error';
-    msg.textContent = '✗ ' + (d.message || 'Failed to save.');
+    msg.className   = "msg error";
+    msg.textContent = "✗ " + (d.message || "Failed to save.");
   }
-  msg.style.display = 'block';
-  setTimeout(() => msg.style.display = 'none', 4000);
+  msg.style.display = "block";
+  setTimeout(() => msg.style.display = "none", 4000);
+}
+
+function checkArrKeys() {
+  const hasKeys = document.getElementById("cfg-sonarr-key").value.trim().length > 0 ||
+                  document.getElementById("cfg-radarr-key").value.trim().length > 0;
+  const toggle  = document.getElementById("cfg-polling-enabled");
+  const hint    = document.getElementById("polling-no-keys-hint");
+  if (!hasKeys) {
+    toggle.disabled    = true;
+    toggle.checked     = false;
+    hint.style.display = "block";
+  } else {
+    toggle.disabled    = false;
+    hint.style.display = "none";
+  }
 }
 
 async function testConnection(service) {
   const btn    = document.getElementById(`test-${service}-btn`);
   const result = document.getElementById(`test-${service}-result`);
-  btn.textContent = '…';
-  btn.disabled    = true;
+  btn.textContent = "…"; btn.disabled = true;
   await saveConfig();
-  const res  = await fetch(`/api/config/test-${service}`, {method: 'POST'});
+  const res  = await fetch(`/api/config/test-${service}`, {method: "POST"});
   const data = await res.json();
-  if (res.ok) {
-    result.className   = 'test-result success';
-    result.textContent = `✓ Connected — ${service} v${data.version}`;
-  } else {
-    result.className   = 'test-result error';
-    result.textContent = `✗ ${data.message || 'Connection failed'}`;
-  }
-  btn.textContent = 'Test';
-  btn.disabled    = false;
+  result.className   = res.ok ? "test-result success" : "test-result error";
+  result.textContent = res.ok
+    ? `✓ Connected — ${service} v${data.version}`
+    : `✗ ${data.message || "Connection failed"}`;
+  btn.textContent = "Test"; btn.disabled = false;
+}
+
+async function testWebhook() {
+  const btn    = document.getElementById("test-webhook-btn");
+  const result = document.getElementById("test-webhook-result");
+  btn.textContent = "…"; btn.disabled = true;
+  await saveConfig();
+  const res  = await fetch("/api/config/test-webhook", {method: "POST"});
+  const data = await res.json();
+  result.className   = res.ok ? "test-result success" : "test-result error";
+  result.textContent = res.ok ? "✓ Webhook delivered" : `✗ ${data.message || "Failed"}`;
+  btn.textContent = "Test"; btn.disabled = false;
 }
 
 async function cleanDatabase() {
-  const result = document.getElementById('clean-db-result');
-  result.className   = 'test-result';
-  result.textContent = 'Cleaning…';
-  const res  = await fetch('/api/db/clean', {method: 'POST'});
+  const result = document.getElementById("clean-db-result");
+  result.className   = "test-result";
+  result.textContent = "Cleaning…";
+  const res  = await fetch("/api/db/clean", {method: "POST"});
   const data = await res.json();
-  if (res.ok) {
-    result.className   = 'test-result success';
-    result.textContent = data.removed > 0
-      ? `✓ Removed ${data.removed} stale record${data.removed > 1 ? 's' : ''}`
-      : '✓ Database is clean — nothing to remove';
-  } else {
-    result.className   = 'test-result error';
-    result.textContent = '✗ Clean failed';
-  }
-}
-
-// ── Database ──────────────────────────────────────────────────────
-async function loadDbStats() {
-  const res = await fetch('/api/db/stats');
-  const s   = await res.json();
-  document.getElementById('db-stats').innerHTML = `
-    <span>Total: ${s.total}</span>
-    <span style="color:var(--accent2)">OK: ${s.ok}</span>
-    <span style="color:var(--danger)">Errors: ${s.errors}</span>`;
-}
-
-async function loadDb() {
-  const search   = document.getElementById('db-search').value;
-  const status   = document.getElementById('db-status-filter').value;
-  const params   = new URLSearchParams({page: dbPage, per_page: 50, search, status});
-  const res      = await fetch('/api/db/files?' + params);
-  const data     = await res.json();
-  const tbody    = document.getElementById('db-tbody');
-  tbody.innerHTML = '';
-
-  data.rows.forEach(row => {
-    const tr  = document.createElement('tr');
-    const cls = row.status === 'ok' ? 'status-ok' : 'status-error';
-    const ts  = new Date(row.updated_at).toLocaleString();
-    const flagCell = row.flagged ? `<span class="flag-badge">⚠ NSFW</span>` : '';
-
-    // Use data attribute for path to avoid any escaping issues
-    const btn = document.createElement('button');
-    btn.className   = 'btn btn-secondary btn-sm';
-    btn.textContent = '↻ Re-queue';
-    btn.dataset.path = row.path;
-    btn.addEventListener('click', () => requeueFile(btn.dataset.path));
-
-    tr.innerHTML = `
-      <td><span class="${cls}">${row.status.toUpperCase()}</span>${flagCell}</td>
-      <td>${row.name}</td>
-      <td class="path-cell" title="${row.path}">${row.path}</td>
-      <td>${ts}</td>
-      <td></td>`;
-    tr.querySelector('td:last-child').appendChild(btn);
-    tbody.appendChild(tr);
-  });
-
-  const totalPages = Math.ceil(data.total / data.per_page);
-  const pg = document.getElementById('db-pagination');
-  pg.innerHTML = '';
-  if (totalPages > 1) {
-    if (dbPage > 1) {
-      const b = document.createElement('button');
-      b.className = 'btn btn-secondary btn-sm';
-      b.textContent = '← Prev';
-      b.onclick = () => { dbPage--; loadDb(); };
-      pg.appendChild(b);
-    }
-    const info = document.createElement('span');
-    info.textContent = `Page ${dbPage} of ${totalPages} (${data.total} total)`;
-    pg.appendChild(info);
-    if (dbPage < totalPages) {
-      const b = document.createElement('button');
-      b.className = 'btn btn-secondary btn-sm';
-      b.textContent = 'Next →';
-      b.onclick = () => { dbPage++; loadDb(); };
-      pg.appendChild(b);
-    }
-  }
-}
-
-async function requeueFile(path) {
-  const res  = await fetch('/api/db/requeue', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify({path}),
-  });
-  const data = await res.json();
-  if (res.ok) toast('Re-queued ✓ — check Review shortly');
-  else toast('Error: ' + data.message, true);
+  result.className   = res.ok ? "test-result success" : "test-result error";
+  result.textContent = res.ok
+    ? (data.removed > 0 ? `✓ Removed ${data.removed} stale record${data.removed > 1 ? "s" : ""}` : "✓ Database is clean")
+    : "✗ Clean failed";
 }
 
 // ── Logs ──────────────────────────────────────────────────────────
 async function loadLogs() {
-  const lines  = document.getElementById('log-lines').value;
-  const level  = document.getElementById('log-level').value;
+  const lines  = document.getElementById("log-lines").value;
+  const level  = document.getElementById("log-level").value;
   const params = new URLSearchParams({lines, level});
-  const res    = await fetch('/api/logs?' + params);
+  const res    = await fetch("/api/logs?" + params);
   const data   = await res.json();
-  const out    = document.getElementById('log-output');
+  const out    = document.getElementById("log-output");
   out.innerHTML = data.lines.map(line => {
-    let cls = 'log-info';
-    if (line.includes('[ERROR]'))        cls = 'log-error';
-    else if (line.includes('[WARNING]')) cls = 'log-warn';
-    else if (line.includes('[DEBUG]'))   cls = 'log-debug';
+    let cls = "log-info";
+    if (line.includes("[ERROR]"))   cls = "log-error";
+    else if (line.includes("[WARNING]")) cls = "log-warn";
+    else if (line.includes("[DEBUG]"))   cls = "log-debug";
     return `<div class="log-line ${cls}">${escapeHtml(line)}</div>`;
-  }).join('');
+  }).join("");
   out.scrollTop = out.scrollHeight;
 }
 
 // ── Modal ─────────────────────────────────────────────────────────
 function showModal(title, body, onConfirm) {
-  document.getElementById('modal-title').textContent   = title;
-  document.getElementById('modal-body').textContent    = body;
-  document.getElementById('modal-confirm').onclick     = onConfirm;
-  document.getElementById('modal-overlay').style.display = 'flex';
+  document.getElementById("modal-title").textContent = title;
+  document.getElementById("modal-body").textContent  = body;
+  document.getElementById("modal-confirm").onclick   = onConfirm;
+  document.getElementById("modal-overlay").style.display = "flex";
 }
 function closeModal() {
-  document.getElementById('modal-overlay').style.display = 'none';
+  document.getElementById("modal-overlay").style.display = "none";
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────
 function openLightbox(src) {
-  const lb     = document.createElement('div');
-  lb.className = 'lightbox';
+  const lb     = document.createElement("div");
+  lb.className = "lightbox";
   lb.innerHTML = `<img src="${src}">`;
   lb.onclick   = () => lb.remove();
   document.body.appendChild(lb);
@@ -548,14 +457,14 @@ function openLightbox(src) {
 
 // ── Toast ─────────────────────────────────────────────────────────
 function toast(msg, isError = false) {
-  const el        = document.getElementById('toast');
+  const el        = document.getElementById("toast");
   el.textContent  = msg;
-  el.style.color  = isError ? 'var(--danger)' : 'var(--accent2)';
-  el.style.display = 'block';
-  setTimeout(() => el.style.display = 'none', 3000);
+  el.style.color  = isError ? "var(--danger)" : "var(--accent2)";
+  el.style.display = "block";
+  setTimeout(() => el.style.display = "none", 3000);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
 function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }

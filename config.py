@@ -13,30 +13,46 @@ import json
 import os
 
 _DEFAULTS = {
-    "watch_folders":          [],
-    "sonarr_url":             "http://localhost:8989",
-    "sonarr_api_key":         "",
-    "radarr_url":             "http://localhost:7878",
-    "radarr_api_key":         "",
-    "polling_enabled":        False,
-    "poll_interval_seconds":  600,
-    "scan_mode":              "review",   # "review" or "safe"
-    "nudenet_threshold":      0.6,
-    "nudenet_frames":         10,
-    "scan_schedule_enabled":  False,
-    "scan_schedule":          "daily",   # daily, twice, quad, hourly
-    "vcs_grid":               "4x4",
-    "vcsi_timeout_seconds":   300,
+    "watch_folders":           [],
+    "sonarr_url":              "http://localhost:8989",
+    "sonarr_api_key":          "",
+    "radarr_url":              "http://localhost:7878",
+    "radarr_api_key":          "",
+    "polling_enabled":         False,
+    "poll_interval_seconds":   600,
+    "scan_schedule_enabled":   False,
+    "scan_schedule":           "daily",
+    # NSFW Detection zones
+    "zone_auto_approve":       0.1,   # below → approved automatically
+    "zone_quarantine":         0.4,   # above → quarantined
+    "zone_auto_reject":        0.85,  # above → rejected immediately
+    "nudenet_frames":          10,
+    "nudenet_threshold":       0.1,   # kept for frame-level hit threshold
+    # Quarantine
+    "quarantine_dir":          "",    # empty = BASE_DIR/quarantine
+    "quarantine_auto_reject_days": 0, # 0 = off, >0 = auto-reject after N days
+    # Webhook
+    "webhook_url":             "",
+    "webhook_on_quarantine":   True,
+    "webhook_on_reject":       True,
+    # VCS
+    "vcs_grid":                "4x4",
+    "vcs_quality":             80,    # JPEG quality 1-95
+    "vcsi_timeout_seconds":    300,
 }
+
 
 def _base_dir() -> str:
     return os.environ.get("BASE_DIR", "/opt/safescanarr/data")
 
+
 def _output_dir() -> str:
     return os.path.join(_base_dir(), "vcs")
 
+
 def _config_path() -> str:
     return os.path.join(_base_dir(), "config.json")
+
 
 def _load() -> dict:
     """Load config.json, creating it from env/defaults if missing."""
@@ -44,12 +60,12 @@ def _load() -> dict:
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     if os.path.exists(path):
-        data = {}
         with open(path) as f:
             data = json.load(f)
-        # Migrate: remove output_dir if present (now hardcoded)
-        data.pop("output_dir", None)
-        # Fill in any new keys added since last save
+        # Remove deprecated keys
+        for old_key in ("output_dir", "scan_mode", "nudenet_enabled"):
+            data.pop(old_key, None)
+        # Fill in any new keys
         changed = False
         for k, v in _DEFAULTS.items():
             if k not in data:
@@ -64,19 +80,27 @@ def _load() -> dict:
         "watch_folders": [
             p.strip() for p in os.environ.get("WATCH_FOLDERS", "").split(",") if p.strip()
         ],
-        "sonarr_url":            os.environ.get("SONARR_URL",            _DEFAULTS["sonarr_url"]),
-        "sonarr_api_key":        os.environ.get("SONARR_API_KEY",        _DEFAULTS["sonarr_api_key"]),
-        "radarr_url":            os.environ.get("RADARR_URL",            _DEFAULTS["radarr_url"]),
-        "radarr_api_key":        os.environ.get("RADARR_API_KEY",        _DEFAULTS["radarr_api_key"]),
+        "sonarr_url":            os.environ.get("SONARR_URL",    _DEFAULTS["sonarr_url"]),
+        "sonarr_api_key":        os.environ.get("SONARR_API_KEY", _DEFAULTS["sonarr_api_key"]),
+        "radarr_url":            os.environ.get("RADARR_URL",    _DEFAULTS["radarr_url"]),
+        "radarr_api_key":        os.environ.get("RADARR_API_KEY", _DEFAULTS["radarr_api_key"]),
         "polling_enabled":       False,
-        "poll_interval_seconds": int(os.environ.get("POLL_INTERVAL_SECONDS", _DEFAULTS["poll_interval_seconds"])),
-        "scan_mode":             "review",
-        "nudenet_threshold":     0.6,
-        "nudenet_frames":        10,
+        "poll_interval_seconds": int(os.environ.get("POLL_INTERVAL_SECONDS", 600)),
         "scan_schedule_enabled": False,
         "scan_schedule":         "daily",
-        "vcs_grid":              os.environ.get("VCS_GRID",              _DEFAULTS["vcs_grid"]),
-        "vcsi_timeout_seconds":  int(os.environ.get("VCSI_TIMEOUT_SECONDS", _DEFAULTS["vcsi_timeout_seconds"])),
+        "zone_auto_approve":     0.1,
+        "zone_quarantine":       0.4,
+        "zone_auto_reject":      0.85,
+        "nudenet_frames":        10,
+        "nudenet_threshold":     0.1,
+        "quarantine_dir":        "",
+        "quarantine_auto_reject_days": 0,
+        "webhook_url":           "",
+        "webhook_on_quarantine": True,
+        "webhook_on_reject":     True,
+        "vcs_grid":              os.environ.get("VCS_GRID", _DEFAULTS["vcs_grid"]),
+        "vcs_quality":           80,
+        "vcsi_timeout_seconds":  int(os.environ.get("VCSI_TIMEOUT_SECONDS", 300)),
     }
     save(cfg)
     return cfg
@@ -85,8 +109,8 @@ def _load() -> dict:
 def save(cfg: dict) -> None:
     path = _config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Never persist output_dir — it's always derived from BASE_DIR
-    cfg.pop("output_dir", None)
+    for old_key in ("output_dir", "scan_mode", "nudenet_enabled"):
+        cfg.pop(old_key, None)
     with open(path, "w") as f:
         json.dump(cfg, f, indent=2)
 
@@ -94,38 +118,54 @@ def save(cfg: dict) -> None:
 def get() -> dict:
     """Return current config as a plain dict, including derived fields."""
     cfg = _load()
-    cfg["output_dir"] = _output_dir()   # add for UI/API consumers
+    cfg["output_dir"]     = _output_dir()
+    cfg["quarantine_dir"] = _resolve_quarantine_dir(cfg)
     return cfg
 
 
+def _resolve_quarantine_dir(cfg: dict) -> str:
+    d = cfg.get("quarantine_dir", "")
+    return d if d else os.path.join(_base_dir(), "quarantine")
+
+
 class Config:
-    """
-    Attribute-style access. Re-reads config.json every time this class
-    is instantiated so changes from the UI take effect immediately.
-    """
     def __init__(self):
         cfg = _load()
-        self.WATCH_FOLDERS         = cfg["watch_folders"]
-        self.OUTPUT_DIR            = _output_dir()
-        self.SONARR_URL            = cfg["sonarr_url"]
-        self.SONARR_API_KEY        = cfg["sonarr_api_key"]
-        self.RADARR_URL            = cfg["radarr_url"]
-        self.RADARR_API_KEY        = cfg["radarr_api_key"]
-        self.POLLING_ENABLED       = cfg.get("polling_enabled", False)
-        self.POLL_INTERVAL_SECONDS = cfg["poll_interval_seconds"]
-        self.SCAN_MODE             = cfg.get("scan_mode", "review")
-        self.NUDENET_THRESHOLD     = float(cfg.get("nudenet_threshold", 0.6))
-        self.NUDENET_FRAMES        = int(cfg.get("nudenet_frames", 10))
-        self.SCAN_SCHEDULE_ENABLED = cfg.get("scan_schedule_enabled", False)
-        self.SCAN_SCHEDULE         = cfg.get("scan_schedule", "daily")
-        self.VCS_GRID              = cfg["vcs_grid"]
-        self.VCSI_TIMEOUT_SECONDS  = cfg["vcsi_timeout_seconds"]
-        self.BASE_DIR              = _base_dir()
-        self.DB_FILE               = os.path.join(self.BASE_DIR, "safescanarr.db")
-        self.LOG_FILE              = os.path.join(self.BASE_DIR, "safescanarr.log")
-        self.WEB_HOST              = os.environ.get("WEB_HOST", "0.0.0.0")
-        self.WEB_PORT              = int(os.environ.get("WEB_PORT", 8686))
+        self.WATCH_FOLDERS           = cfg["watch_folders"]
+        self.OUTPUT_DIR              = _output_dir()
+        self.SONARR_URL              = cfg["sonarr_url"]
+        self.SONARR_API_KEY          = cfg["sonarr_api_key"]
+        self.RADARR_URL              = cfg["radarr_url"]
+        self.RADARR_API_KEY          = cfg["radarr_api_key"]
+        self.POLLING_ENABLED         = cfg.get("polling_enabled", False)
+        self.POLL_INTERVAL_SECONDS   = cfg["poll_interval_seconds"]
+        self.SCAN_SCHEDULE_ENABLED   = cfg.get("scan_schedule_enabled", False)
+        self.SCAN_SCHEDULE           = cfg.get("scan_schedule", "daily")
+        # Zones
+        self.ZONE_AUTO_APPROVE       = float(cfg.get("zone_auto_approve", 0.1))
+        self.ZONE_QUARANTINE         = float(cfg.get("zone_quarantine", 0.4))
+        self.ZONE_AUTO_REJECT        = float(cfg.get("zone_auto_reject", 0.85))
+        # NudeNet
+        self.NUDENET_FRAMES          = int(cfg.get("nudenet_frames", 10))
+        self.NUDENET_THRESHOLD       = float(cfg.get("nudenet_threshold", 0.1))
+        # Quarantine
+        self.QUARANTINE_DIR          = _resolve_quarantine_dir(cfg)
+        self.QUARANTINE_AUTO_REJECT_DAYS = int(cfg.get("quarantine_auto_reject_days", 0))
+        # Webhook
+        self.WEBHOOK_URL             = cfg.get("webhook_url", "")
+        self.WEBHOOK_ON_QUARANTINE   = cfg.get("webhook_on_quarantine", True)
+        self.WEBHOOK_ON_REJECT       = cfg.get("webhook_on_reject", True)
+        # VCS
+        self.VCS_GRID                = cfg["vcs_grid"]
+        self.VCS_QUALITY             = int(cfg.get("vcs_quality", 80))
         self.VCSI_EXTRA_ARGS: list[str] = []
+        self.VCSI_TIMEOUT_SECONDS    = cfg["vcsi_timeout_seconds"]
+        # System
+        self.BASE_DIR                = _base_dir()
+        self.DB_FILE                 = os.path.join(self.BASE_DIR, "safescanarr.db")
+        self.LOG_FILE                = os.path.join(self.BASE_DIR, "safescanarr.log")
+        self.WEB_HOST                = os.environ.get("WEB_HOST", "0.0.0.0")
+        self.WEB_PORT                = int(os.environ.get("WEB_PORT", 8686))
 
     @staticmethod
     def version() -> str:

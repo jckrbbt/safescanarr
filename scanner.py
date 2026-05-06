@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-safescanarr/scanner.py
-Scans watched folders for new or changed video files, generates video contact
-sheets via vcsi, runs NudeNet analysis, and records everything in a SQLite DB.
+safescanarr/scanner.py v0.6
 
-Modes:
-  --scan          Walk all watched folders (nightly scan)
-  --file PATH     Process a single specific file (poller/hook mode)
-  --list          Print all tracked files
-  --reset PATH    Remove a file from the DB so it gets re-processed
+State machine:
+  max_confidence < zone_auto_approve  → approved  (auto, no review needed)
+  zone_auto_approve ≤ conf < zone_quarantine → pending (review queue)
+  zone_quarantine ≤ conf < zone_auto_reject  → quarantined (video moved)
+  conf ≥ zone_auto_reject             → rejected  (video deleted immediately)
+  zone_auto_reject_days = 0           → quarantine skipped, straight to reject
 """
 
 import argparse
@@ -27,9 +26,6 @@ sys.path.insert(0, "/opt/safescanarr")
 from config import Config as _ConfigClass
 from database import Database
 
-# ---------------------------------------------------------------------------
-# Logging — re-read config each run so log path is always current
-# ---------------------------------------------------------------------------
 _cfg_for_log = _ConfigClass()
 logging.basicConfig(
     level=logging.INFO,
@@ -41,9 +37,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Video file extensions
-# ---------------------------------------------------------------------------
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".m4v",
     ".flv", ".webm", ".ts", ".mpg", ".mpeg",
@@ -74,9 +67,7 @@ def get_vcsi_bin() -> str:
     venv_bin = Path(sys.executable).parent
     vcsi_bin = venv_bin / "vcsi"
     if not vcsi_bin.exists():
-        log.critical(
-            "vcsi not found at %s — install it with: pip install vcsi", vcsi_bin
-        )
+        log.critical("vcsi not found at %s", vcsi_bin)
         sys.exit(1)
     return str(vcsi_bin)
 
@@ -86,9 +77,12 @@ def get_vcsi_bin() -> str:
 # ---------------------------------------------------------------------------
 
 def generate_vcs(video_path: Path, output_dir: Path, cfg, db: Database) -> bool:
-    """Generate a contact sheet. Returns True on success."""
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / (video_path.stem + ".jpg")
+
+    extra = list(cfg.VCSI_EXTRA_ARGS)
+    if cfg.VCS_QUALITY and cfg.VCS_QUALITY != 95:
+        extra += ["--jpeg-quality", str(cfg.VCS_QUALITY)]
 
     cmd = [
         get_vcsi_bin(),
@@ -96,9 +90,9 @@ def generate_vcs(video_path: Path, output_dir: Path, cfg, db: Database) -> bool:
         "-t",
         "-g", cfg.VCS_GRID,
         "-o", str(out_file),
-    ] + cfg.VCSI_EXTRA_ARGS
+    ] + extra
 
-    log.info("Generating contact sheet: %s → %s", video_path.name, out_file)
+    log.info("Generating contact sheet: %s", video_path.name)
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=cfg.VCSI_TIMEOUT_SECONDS,
@@ -116,14 +110,11 @@ def generate_vcs(video_path: Path, output_dir: Path, cfg, db: Database) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# NudeNet analysis
+# NSFW analysis
 # ---------------------------------------------------------------------------
 
 def analyse_video_file(video_path: Path, cfg) -> dict:
-    """
-    Extract frames from *video_path* and run NudeNet on each full-res frame.
-    Returns {"flagged": bool, "labels": [...], "max_conf": float, "error": str|None}
-    """
+    """Extract frames and run NSFW detection. Returns result dict."""
     try:
         from nudenet_scanner import analyse_video
         return analyse_video(
@@ -132,58 +123,100 @@ def analyse_video_file(video_path: Path, cfg) -> dict:
             num_frames=cfg.NUDENET_FRAMES,
         )
     except Exception as e:
-        log.error("NudeNet analysis error: %s", e)
+        log.error("NSFW analysis error: %s", e)
         return {"flagged": False, "labels": [], "max_conf": 0.0, "error": str(e)}
 
 
-def handle_flagged(video_path: Path, sheet_path: Path,
-                   nudenet_result: dict, cfg, db: Database) -> None:
+def determine_state(max_conf: float, cfg) -> str:
     """
-    Handle a flagged file according to the current scan mode.
-    Review Mode: mark flagged in DB, leave sheet in review queue.
-    Safe Mode:   delete source, blacklist in Sonarr/Radarr,
-                 move sheet to vcs/auto/, record in auto_handled.
+    Apply zone thresholds to determine the review state.
+    If quarantine_auto_reject_days == 0, quarantine zone is skipped → reject.
     """
-    abs_path   = str(video_path.resolve())
-    reason_str = ", ".join(
-        f"{h['label']} ({h['confidence']:.0%})" for h in nudenet_result["labels"]
-    )
-    log.warning("FLAGGED [%s] %s — %s", cfg.SCAN_MODE, abs_path, reason_str)
+    if max_conf >= cfg.ZONE_AUTO_REJECT:
+        return "rejected"
+    if max_conf >= cfg.ZONE_QUARANTINE:
+        # Skip quarantine → immediate reject if auto_reject_days == 0
+        return "rejected" if cfg.QUARANTINE_AUTO_REJECT_DAYS == 0 else "quarantined"
+    if max_conf < cfg.ZONE_AUTO_APPROVE:
+        return "approved"
+    return "pending"
 
-    if cfg.SCAN_MODE == "safe":
-        # Move sheet to auto subfolder before deleting source
-        auto_dir = Path(cfg.OUTPUT_DIR) / "auto"
-        auto_dir.mkdir(parents=True, exist_ok=True)
-        auto_sheet = auto_dir / sheet_path.name
-        if sheet_path.exists():
-            shutil.move(str(sheet_path), str(auto_sheet))
 
-        # Blacklist in Sonarr and Radarr
-        _blacklist(abs_path, cfg)
+# ---------------------------------------------------------------------------
+# State actions
+# ---------------------------------------------------------------------------
 
-        # Delete source file
-        if video_path.exists():
-            video_path.unlink()
-            log.info("Safe Mode: deleted source %s", abs_path)
+def action_quarantine(video_path: Path, cfg, db: Database,
+                      abs_path: str, nudenet_result: dict) -> str:
+    """Move video to quarantine folder. Returns new quarantine path."""
+    q_dir = Path(cfg.QUARANTINE_DIR)
+    q_dir.mkdir(parents=True, exist_ok=True)
+    q_path = q_dir / video_path.name
+    # Avoid name collision
+    if q_path.exists():
+        stem = video_path.stem
+        suffix = video_path.suffix
+        q_path = q_dir / f"{stem}_{int(datetime.now().timestamp())}{suffix}"
+    shutil.move(str(video_path), str(q_path))
+    log.warning("QUARANTINED: %s → %s", abs_path, q_path)
+    _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
+    return str(q_path)
 
-        # Record in audit table
-        db.record_auto_handled(
-            path       = abs_path,
-            name       = video_path.name,
-            sheet_name = sheet_path.name,
-            reason     = reason_str,
-            confidence = nudenet_result["max_conf"],
+
+def action_reject(video_path: Path, cfg, db: Database,
+                  abs_path: str, nudenet_result: dict,
+                  sheet_path: Path = None,
+                  from_quarantine: bool = False) -> None:
+    """Delete video (and sheet) permanently."""
+    # Delete video
+    target = video_path
+    if from_quarantine:
+        # video_path is already the quarantine path
+        target = video_path
+    if target.exists():
+        target.unlink()
+        log.warning("REJECTED (deleted): %s", target)
+
+    # Delete sheet
+    if sheet_path and sheet_path.exists():
+        sheet_path.unlink()
+        log.info("Sheet deleted: %s", sheet_path)
+
+    _send_webhook(cfg, "rejected", abs_path, nudenet_result)
+    _blacklist(abs_path, cfg)
+
+
+def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
+    if not cfg.WEBHOOK_URL:
+        return
+    if event == "quarantined" and not cfg.WEBHOOK_ON_QUARANTINE:
+        return
+    if event == "rejected" and not cfg.WEBHOOK_ON_REJECT:
+        return
+
+    labels = [h["label"] for h in (nudenet_result.get("labels") or [])]
+    payload = json.dumps({
+        "event":      event,
+        "path":       path,
+        "confidence": nudenet_result.get("max_conf", 0),
+        "labels":     labels,
+        "timestamp":  datetime.now().isoformat(),
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            cfg.WEBHOOK_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
-        # Remove from files table
-        db.delete_file(abs_path)
-
-    else:
-        # Review Mode — just flag in DB so UI can highlight it
-        log.info("Review Mode: flagged in DB, queued for manual review")
+        urllib.request.urlopen(req, timeout=10)
+        log.info("Webhook sent: %s → %s", event, cfg.WEBHOOK_URL)
+    except Exception as e:
+        log.warning("Webhook failed: %s", e)
 
 
 def _blacklist(file_path: str, cfg) -> None:
-    """Try to blacklist in both Sonarr and Radarr (best effort)."""
     for service in ("sonarr", "radarr"):
         base    = cfg.SONARR_URL.rstrip("/") if service == "sonarr" else cfg.RADARR_URL.rstrip("/")
         api_key = cfg.SONARR_API_KEY        if service == "sonarr" else cfg.RADARR_API_KEY
@@ -196,8 +229,8 @@ def _blacklist(file_path: str, cfg) -> None:
                 data = json.loads(r.read())
             history_id = None
             for record in data.get("records", []):
-                path = (record.get("data") or {}).get("importedPath", "")
-                if path == file_path:
+                p = (record.get("data") or {}).get("importedPath", "")
+                if p == file_path:
                     history_id = record.get("id")
                     break
             if history_id:
@@ -209,7 +242,7 @@ def _blacklist(file_path: str, cfg) -> None:
                 urllib.request.urlopen(req2, timeout=10)
                 log.info("Blacklisted in %s (history id %s)", service, history_id)
         except Exception as e:
-            log.warning("Blacklist failed for %s/%s: %s", service, file_path, e)
+            log.warning("Blacklist failed for %s: %s", service, e)
 
 
 # ---------------------------------------------------------------------------
@@ -217,69 +250,78 @@ def _blacklist(file_path: str, cfg) -> None:
 # ---------------------------------------------------------------------------
 
 def process_one(video: Path, db: Database, source: str = "manual") -> None:
-    """Process a single video file."""
-    cfg = _ConfigClass()  # fresh config each call
+    cfg = _ConfigClass()
 
     if not video.exists():
         log.error("[%s] File not found: %s", source, video)
         return
     if not is_video(video):
-        log.warning("[%s] Not a recognised video file, skipping: %s", source, video)
+        log.warning("[%s] Not a video, skipping: %s", source, video)
         return
 
     name, size, mtime = file_fingerprint(video)
     abs_path = str(video.resolve())
     existing = db.get_file(abs_path)
 
-    def _do_process(label: str):
-        log.info("[%s] %s  %s", source, label, abs_path)
-        output_dir = Path(cfg.OUTPUT_DIR)
-        ok = generate_vcs(video, output_dir, cfg, db)
-        if not ok:
-            db.upsert_file(abs_path, name, size, mtime, status="error")
-            return
-
-        sheet_path    = output_dir / (video.stem + ".jpg")
-        nudenet_result = analyse_video_file(video, cfg)
-        flagged       = nudenet_result["flagged"]
-        flag_reason   = (
-            ", ".join(h["label"] for h in nudenet_result["labels"])
-            if flagged else None
-        )
-
-        if flagged:
-            handle_flagged(video, sheet_path, nudenet_result, cfg, db)
-            if cfg.SCAN_MODE == "safe":
-                return  # source deleted, no DB record needed
-
-        db.upsert_file(
-            abs_path, name, size, mtime,
-            status="ok",
-            flagged=flagged,
-            flag_reason=flag_reason,
-        )
-
-    if existing is None:
-        _do_process("NEW")
-    else:
-        stored_size   = existing["size"]
-        stored_mtime  = existing["mtime"]
-        stored_status = existing["status"]
-        changed = size != stored_size or abs(mtime - stored_mtime) > 1
-
-        if changed:
-            _do_process("CHANGED")
-        elif stored_status == "error":
-            _do_process("RETRY")
-        else:
+    # If file changed (upgrade/replace), reset to pending regardless of state
+    if existing is not None:
+        changed = (size != existing["size"] or abs(mtime - existing["mtime"]) > 1)
+        if not changed and existing["status"] != "error":
             log.debug("[%s] UNCHANGED, skipping: %s", source, abs_path)
+            return
+        if changed:
+            log.info("[%s] CHANGED (re-processing): %s", source, abs_path)
+
+    log.info("[%s] Processing: %s", source, abs_path)
+
+    # 1. Generate contact sheet
+    output_dir = Path(cfg.OUTPUT_DIR)
+    ok = generate_vcs(video, output_dir, cfg, db)
+    if not ok:
+        db.upsert_file(abs_path, name, size, mtime, status="error",
+                       review_state="pending")
+        return
+
+    sheet_path = output_dir / (video.stem + ".jpg")
+
+    # 2. NSFW analysis on source video frames
+    nudenet_result = analyse_video_file(video, cfg)
+    max_conf       = nudenet_result.get("max_conf", 0.0)
+    flag_reason    = ", ".join(h["label"] for h in nudenet_result.get("labels", []))
+
+    # 3. Determine state from zones
+    state = determine_state(max_conf, cfg)
+    log.info("[%s] NSFW confidence=%.2f → state=%s", source, max_conf, state)
+
+    quarantine_path = None
+
+    if state == "quarantined":
+        quarantine_path = action_quarantine(video, cfg, db, abs_path, nudenet_result)
+
+    elif state == "rejected":
+        action_reject(video, cfg, db, abs_path, nudenet_result, sheet_path=sheet_path)
+        db.upsert_file(abs_path, name, size, mtime, status="ok",
+                       review_state="rejected", flagged=True,
+                       flag_reason=flag_reason, nsfw_confidence=max_conf)
+        return
+
+    # 4. Save to DB
+    db.upsert_file(
+        abs_path, name, size, mtime,
+        status="ok",
+        review_state=state,
+        flagged=(max_conf >= cfg.ZONE_QUARANTINE),
+        flag_reason=flag_reason or None,
+        nsfw_confidence=max_conf if max_conf > 0 else None,
+    )
+    if quarantine_path:
+        db.set_review_state(abs_path, "quarantined", quarantine_path=quarantine_path)
 
 
 def run_scan(db: Database) -> None:
-    """Full folder scan."""
     cfg = _ConfigClass()
     log.info("=== Full scan started ===")
-    counts = {"new": 0, "changed": 0, "retried": 0, "skipped": 0, "error": 0}
+    counts = {"new": 0, "changed": 0, "skipped": 0, "error": 0}
 
     for folder in cfg.WATCH_FOLDERS:
         folder = Path(folder)
@@ -300,14 +342,25 @@ def run_scan(db: Database) -> None:
                     counts["changed"] += 1
                 elif existing["status"] == "error":
                     process_one(video, db, "scan")
-                    counts["retried"] += 1
                 else:
                     counts["skipped"] += 1
 
-    log.info(
-        "=== Full scan complete — new:%d changed:%d retried:%d skipped:%d ===",
-        counts["new"], counts["changed"], counts["retried"], counts["skipped"],
-    )
+    # Auto-reject stale quarantined items
+    if cfg.QUARANTINE_AUTO_REJECT_DAYS > 0:
+        stale = db.get_stale_quarantined(cfg.QUARANTINE_AUTO_REJECT_DAYS)
+        for row in stale:
+            log.info("Auto-rejecting stale quarantine: %s", row["path"])
+            q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
+            sheet  = Path(cfg.OUTPUT_DIR) / (Path(row["path"]).stem + ".jpg")
+            if q_path and q_path.exists():
+                q_path.unlink()
+            if sheet.exists():
+                sheet.unlink()
+            db.set_review_state(row["path"], "rejected")
+            _send_webhook(cfg, "rejected", row["path"], {})
+
+    log.info("=== Scan complete — new:%d changed:%d skipped:%d ===",
+             counts["new"], counts["changed"], counts["skipped"])
 
 
 # ---------------------------------------------------------------------------
@@ -315,12 +368,12 @@ def run_scan(db: Database) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="safescanarr — scanner")
-    parser.add_argument("--scan",   action="store_true", help="Full folder scan")
-    parser.add_argument("--file",   metavar="PATH",      help="Process one file")
-    parser.add_argument("--source", metavar="LABEL",     default="manual")
-    parser.add_argument("--list",   action="store_true", help="List tracked files")
-    parser.add_argument("--reset",  metavar="PATH",      help="Remove file from DB")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scan",   action="store_true")
+    parser.add_argument("--file",   metavar="PATH")
+    parser.add_argument("--source", default="manual")
+    parser.add_argument("--list",   action="store_true")
+    parser.add_argument("--reset",  metavar="PATH")
     args = parser.parse_args()
 
     cfg = _ConfigClass()
@@ -328,12 +381,11 @@ def main():
 
     if args.list:
         rows = db.list_files()
-        print(f"{'Status':<8}  {'Flagged':<8}  {'Last Modified':<20}  Path")
-        print("-" * 90)
+        print(f"{'State':<12} {'Conf':<6} {'Name'}")
+        print("-" * 70)
         for r in rows:
-            ts = datetime.fromtimestamp(r["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
-            flag = "⚠ YES" if r["flagged"] else ""
-            print(f"{r['status']:<8}  {flag:<8}  {ts:<20}  {r['path']}")
+            conf = f"{r['nsfw_confidence']:.2f}" if r["nsfw_confidence"] else "-"
+            print(f"{r['review_state']:<12} {conf:<6} {r['name']}")
         return
 
     if args.reset:
