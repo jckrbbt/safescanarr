@@ -7,10 +7,13 @@ let selections = {};
 let statsTimer    = null;
 let scanPollTimer = null;
 let scanRunning   = false;
+let pageSize      = 20;
+let tabPage       = {};  // { tabName: currentPage }
 
 TABS.forEach(t => {
   tabSheets[t]  = [];
   selections[t] = new Set();
+  tabPage[t]    = 1;
 });
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -67,7 +70,8 @@ async function loadStats() {
 }
 
 // ── Load a tab ────────────────────────────────────────────────────
-async function loadPage(tab) {
+async function loadPage(tab, resetPage) {
+  if (resetPage) tabPage[tab] = 1;
   const search = (document.getElementById("global-search") || {}).value || "";
   const res    = await fetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(search.toLowerCase()));
   tabSheets[tab] = await res.json();
@@ -91,7 +95,16 @@ function renderTab(tab) {
   }
   if (empty) empty.style.display = "none";
 
-  sheets.forEach(function(sheet, idx) {
+  const page      = tabPage[tab] || 1;
+  const totalPages = Math.ceil(sheets.length / pageSize);
+  const start      = (page - 1) * pageSize;
+  const pageSheets = sheets.slice(start, start + pageSize);
+
+  // Render pagination controls
+  renderPagination(tab, page, totalPages, sheets.length);
+
+  pageSheets.forEach(function(sheet, localIdx) {
+    const idx = start + localIdx;
     if (!window._stems[tab]) window._stems[tab] = {};
     window._stems[tab][idx] = sheet.stem;
 
@@ -165,6 +178,60 @@ function renderTab(tab) {
 
     grid.appendChild(card);
   });
+}
+
+function renderPagination(tab, page, totalPages, total) {
+  var existing = document.getElementById("pagination-" + tab);
+  if (existing) existing.remove();
+  if (totalPages <= 1) return;
+
+  var pag = document.createElement("div");
+  pag.id = "pagination-" + tab;
+  pag.className = "pagination-bar";
+
+  // Page size selector
+  var sizeHtml = '<select class="select select-sm" onchange="changePageSize(' + "'" + tab + "'" + ', this.value)">';
+  [20, 50, 100].forEach(function(n) {
+    sizeHtml += '<option value="' + n + '"' + (n === pageSize ? ' selected' : '') + '>' + n + ' per page</option>';
+  });
+  sizeHtml += '</select>';
+
+  // Page info
+  var infoHtml = '<span class="pag-info">Page ' + page + ' of ' + totalPages + ' (' + total + ' total)</span>';
+
+  // Prev/Next
+  var prevHtml = page > 1
+    ? '<button class="btn btn-secondary btn-sm" onclick="gotoPage(' + "'" + tab + "'" + ', ' + (page-1) + ')">← Prev</button>'
+    : '';
+  var nextHtml = page < totalPages
+    ? '<button class="btn btn-secondary btn-sm" onclick="gotoPage(' + "'" + tab + "'" + ', ' + (page+1) + ')">Next →</button>'
+    : '';
+
+  pag.innerHTML = sizeHtml + prevHtml + infoHtml + nextHtml;
+
+  // Insert before grid
+  var grid = document.getElementById(tab + "-grid");
+  if (grid) grid.parentNode.insertBefore(pag, grid);
+}
+
+function gotoPage(tab, page) {
+  tabPage[tab] = page;
+  window._stems = window._stems || {};
+  window._stems[tab] = {};
+  renderTab(tab);
+  updateBulkBar(tab);
+  // Scroll content to top
+  var content = document.querySelector(".content");
+  if (content) content.scrollTop = 0;
+}
+
+function changePageSize(tab, size) {
+  pageSize    = parseInt(size);
+  tabPage[tab] = 1;
+  window._stems = window._stems || {};
+  window._stems[tab] = {};
+  renderTab(tab);
+  updateBulkBar(tab);
 }
 
 function renderActions(tab, idx, sheet) {
@@ -290,10 +357,10 @@ function setScanRunning(running) {
   if (!btn) return;
   if (running) {
     btn.textContent = "■ Stop Scan";
-    btn.className   = "btn btn-danger";
+    btn.className   = "btn btn-danger btn-sm";
   } else {
     btn.textContent = "▶ Run Scan Now";
-    btn.className   = "btn btn-primary";
+    btn.className   = "btn btn-primary btn-sm";
   }
 }
 
@@ -368,24 +435,131 @@ function updateBulkBar(tab) {
 
 // ── Global search ─────────────────────────────────────────────────
 async function onGlobalSearch() {
-  const q = (document.getElementById("global-search") || {}).value || "";
+  const q       = ((document.getElementById("global-search") || {}).value || "").trim();
+  const clearBtn = document.getElementById("search-clear");
+
   if (q.length === 0) {
-    if (TABS.includes(currentTab)) loadPage(currentTab);
+    if (clearBtn) clearBtn.style.display = "none";
+    // Return to previous tab
+    var prev = currentTab === "search" ? "pending" : currentTab;
+    navigateTo(prev);
     return;
   }
-  for (const tab of TABS) {
-    const res = await fetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(q.toLowerCase()));
-    tabSheets[tab] = await res.json();
-    const badge = document.getElementById("badge-" + tab);
-    if (badge) badge.textContent = tabSheets[tab].length > 0 ? tabSheets[tab].length : "";
-    if (tab === currentTab) {
-      if (!window._stems) window._stems = {};
-      window._stems[tab] = {};
-      selections[tab].clear();
-      renderTab(tab);
-      updateBulkBar(tab);
-    }
+
+  if (clearBtn) clearBtn.style.display = "block";
+
+  // Show search results page
+  document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
+  document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
+  var searchPage = document.getElementById("page-search");
+  if (searchPage) searchPage.classList.add("active");
+  currentTab = "search";
+
+  var heading = document.getElementById("search-heading");
+  if (heading) heading.textContent = "Search: " + q;
+
+  var container = document.getElementById("search-results");
+  if (container) container.innerHTML = '<p style="color:var(--text-dim);padding:20px 0">Searching…</p>';
+
+  var tabLabels = {pending: "Review", approved: "Approved", quarantined: "Quarantine", rejected: "Rejected"};
+  var sections  = [];
+
+  for (var i = 0; i < TABS.length; i++) {
+    var tab = TABS[i];
+    var res = await fetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(q.toLowerCase()));
+    var sheets = await res.json();
+    tabSheets[tab] = sheets;
+    if (sheets.length > 0) sections.push({tab: tab, label: tabLabels[tab], sheets: sheets});
   }
+
+  if (!container) return;
+  if (sections.length === 0) {
+    container.innerHTML = '<div class="search-empty">No results found for "' + escapeHtml(q) + '"</div>';
+    return;
+  }
+
+  container.innerHTML = "";
+  sections.forEach(function(sec) {
+    var section = document.createElement("div");
+    section.className = "search-section";
+
+    var badge = '<span class="nav-badge">' + sec.sheets.length + '</span>';
+    section.innerHTML = '<div class="search-section-title">' + sec.label + badge + '</div>';
+
+    // Mini grid for results
+    var grid = document.createElement("div");
+    grid.className = "sheets-grid";
+    grid.id = "search-grid-" + sec.tab;
+
+    if (!window._stems) window._stems = {};
+    window._stems[sec.tab] = {};
+
+    sec.sheets.slice(0, 20).forEach(function(sheet, idx) {
+      window._stems[sec.tab][idx] = sheet.stem;
+
+      var isApproved = sec.tab === "approved";
+      var isRejected = sec.tab === "rejected";
+      var showNsfw   = sheet.flagged && !isApproved;
+
+      var confBadge = "";
+      if (sheet.nsfw_confidence != null && !isApproved) {
+        var pct = Math.round(sheet.nsfw_confidence * 100);
+        var tip = sheet.flag_reason ? sheet.flag_reason.replace(/"/g, "&quot;") : "NSFW detected";
+        confBadge = '<span class="conf-badge" title="' + tip + '">' + pct + '%</span>';
+      }
+
+      var imgHtml = '<div class="sheet-img-placeholder">No sheet</div>';
+      if (sheet.has_sheet) {
+        var src = "/api/sheets/image/" + encodeURIComponent(sheet.filename);
+        if (isRejected) {
+          imgHtml = '<div class="sheet-img-hidden" data-src="' + src + '"><div class="sheet-img-hidden-label">⚠ Click to reveal</div></div>';
+        } else {
+          imgHtml = '<img class="sheet-img" src="' + src + '" alt="" loading="lazy">';
+        }
+      }
+
+      var nsfwOverlay = showNsfw ? '<div class="flagged-overlay">⚠ NSFW</div>' : "";
+      var srcPath = (sheet.source_path || "Unknown").replace(/"/g, "&quot;");
+
+      var card = document.createElement("div");
+      card.className = "sheet-card" + (showNsfw ? " flagged" : "");
+      card.dataset.stem = sheet.stem;
+      card.innerHTML =
+        nsfwOverlay + imgHtml +
+        '<div class="sheet-info">' +
+          '<div class="sheet-name">' + confBadge + escapeHtml(sheet.stem) + '</div>' +
+          '<div class="sheet-path" title="' + srcPath + '">' + escapeHtml(sheet.source_path || "Unknown") + '</div>' +
+          renderActions(sec.tab, idx, sheet) +
+        '</div>';
+
+      var img = card.querySelector(".sheet-img");
+      if (img) { var s = img.src; img.addEventListener("click", function() { openLightbox(s); }); }
+      var hidden = card.querySelector(".sheet-img-hidden");
+      if (hidden) { var s2 = hidden.dataset.src; hidden.addEventListener("click", function() { revealImage(hidden, s2); }); }
+
+      grid.appendChild(card);
+    });
+
+    if (sec.sheets.length > 20) {
+      var more = document.createElement("p");
+      more.style.cssText = "color:var(--text-dim);font-size:12px;margin-top:8px";
+      more.textContent = "+" + (sec.sheets.length - 20) + " more — go to " + sec.label + " tab to see all";
+      section.appendChild(grid);
+      section.appendChild(more);
+    } else {
+      section.appendChild(grid);
+    }
+
+    container.appendChild(section);
+  });
+}
+
+function clearSearch() {
+  var input  = document.getElementById("global-search");
+  var clearBtn = document.getElementById("search-clear");
+  if (input) input.value = "";
+  if (clearBtn) clearBtn.style.display = "none";
+  navigateTo("pending");
 }
 
 // ── Config ────────────────────────────────────────────────────────
@@ -556,6 +730,37 @@ function revealImage(el, src) {
   img.addEventListener("click", function() { openLightbox(src); });
   el.replaceWith(img);
 }
+
+// ── Sidebar toggle ───────────────────────────────────────────────
+function toggleSidebar() {
+  var sidebar   = document.querySelector(".sidebar");
+  var backdrop  = document.getElementById("sidebar-backdrop");
+  var isMobile  = window.innerWidth <= 768;
+
+  if (isMobile) {
+    var hidden = sidebar.classList.toggle("collapsed");
+    if (backdrop) backdrop.classList.toggle("visible", !hidden);
+  } else {
+    sidebar.classList.toggle("collapsed");
+  }
+  // Persist preference
+  try { localStorage.setItem("sidebarCollapsed", sidebar.classList.contains("collapsed")); } catch(e) {}
+}
+
+// Restore sidebar state on load
+document.addEventListener("DOMContentLoaded", function() {
+  try {
+    var pref    = localStorage.getItem("sidebarCollapsed");
+    var sidebar = document.querySelector(".sidebar");
+    var isMobile = window.innerWidth <= 768;
+    // Default: collapsed on mobile, expanded on desktop
+    if (pref === null) {
+      if (isMobile) sidebar.classList.add("collapsed");
+    } else if (pref === "true") {
+      sidebar.classList.add("collapsed");
+    }
+  } catch(e) {}
+});
 
 // ── Toast ─────────────────────────────────────────────────────────
 function toast(msg, isError) {

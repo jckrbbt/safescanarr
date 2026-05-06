@@ -11,12 +11,17 @@
   <!-- ── TOP BAR ─────────────────────────────────────────────── -->
   <header class="topbar">
     <div class="topbar-brand">
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
       <span class="nav-logo">🛡️</span>
       <span class="nav-title">Safe Scanarr</span>
       <span class="nav-version" id="nav-version"></span>
     </div>
-    <div class="topbar-search">
-      <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearch()">
+    <div class="topbar-right">
+      <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ Run Scan Now</button>
+      <div class="topbar-search">
+        <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearch()">
+        <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display:none" title="Clear search">✕</button>
+      </div>
     </div>
   </header>
 
@@ -326,6 +331,17 @@
         </div>
       </div>
 
+      <!-- ── SEARCH RESULTS ───────────────────────────────── -->
+      <div id="page-search" class="page">
+        <div class="page-header">
+          <h1 id="search-heading">Search Results</h1>
+          <div class="header-actions">
+            <button class="btn btn-secondary" onclick="clearSearch()">✕ Clear Search</button>
+          </div>
+        </div>
+        <div id="search-results"></div>
+      </div>
+
       <!-- ── LOGS ──────────────────────────────────────────── -->
       <div id="page-logs" class="page">
         <div class="page-header">
@@ -360,6 +376,7 @@
   </div>
 
   <div id="toast" class="toast" style="display:none"></div>
+  <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="toggleSidebar()"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>
