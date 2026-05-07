@@ -126,13 +126,14 @@ function renderTab(tab) {
       confBadge  = '<span class="conf-badge" title="' + tip + '">' + pct + '%</span>';
     }
 
-    // Label breakdown chips
-    let labelBreakdown = "";
+    // Label breakdown chips (deduped)
+    var labelBreakdown = "";
     if (showNsfw && sheet.flag_reason) {
-      const chips = sheet.flag_reason.split(", ").map(function(l) {
-        return '<span class="label-chip">' + l.replace(/_/g, " ") + '</span>';
+      var dedupedChips = _dedupeLabels(sheet.flag_reason).map(function(l) {
+        var name = l.label.replace(/_/g, " ").toLowerCase().replace(/\w/g, function(c) { return c.toUpperCase(); });
+        return '<span class="label-chip">' + name + (l.conf > 0 ? " " + l.conf + "%" : "") + '</span>';
       }).join("");
-      labelBreakdown = '<div class="label-breakdown">' + chips + '</div>';
+      labelBreakdown = '<div class="label-breakdown">' + dedupedChips + '</div>';
     }
 
     // Image
