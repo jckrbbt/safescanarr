@@ -23,7 +23,8 @@ _DEFAULTS = {
     "scan_schedule_enabled":   False,
     "scan_schedule":           "daily",
     # NSFW Detection zones
-    "zone_auto_approve":       0.2,   # below → approved automatically
+    "detection_profile":       "balanced",  # conservative, balanced, aggressive, custom
+    "zone_auto_approve":       0.4,   # below → approved automatically
     "zone_quarantine":         0.5,   # above → quarantined
     "zone_auto_reject":        0.9,   # above → rejected immediately
     "nudenet_frames":          10,
@@ -87,7 +88,8 @@ def _load() -> dict:
         "poll_interval_seconds": int(os.environ.get("POLL_INTERVAL_SECONDS", 600)),
         "scan_schedule_enabled": False,
         "scan_schedule":         "daily",
-        "zone_auto_approve":     0.2,
+        "detection_profile":     "balanced",
+        "zone_auto_approve":     0.4,
         "zone_quarantine":       0.5,
         "zone_auto_reject":      0.9,
         "nudenet_frames":        10,

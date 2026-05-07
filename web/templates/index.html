@@ -77,6 +77,9 @@
           </div>
         </div>
         <div class="review-toolbar">
+          <label class="select-all-label">
+            <input type="checkbox" id="select-all-pending" onchange="toggleSelectAll('pending')"> Select all
+          </label>
           <div class="bulk-actions" id="bulk-actions-pending" style="display:none">
             <span id="selected-count-pending" class="badge"></span>
             <button class="btn btn-success btn-sm" onclick="bulkAction('pending','approve')">✓ Approve</button>
@@ -84,9 +87,6 @@
             <button class="btn btn-secondary btn-sm" id="bulk-select-all-pending" onclick="selectAllVisible('pending')" style="display:none">☑ Select All</button>
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('pending')">✕ Clear</button>
           </div>
-          <label class="select-all-label">
-            <input type="checkbox" id="select-all-pending" onchange="toggleSelectAll('pending')"> Select all
-          </label>
         </div>
         <div id="pending-empty" class="empty-state" style="display:none"><p>🎉 Nothing to review!</p></div>
         <div id="pending-grid" class="sheets-grid"></div>
@@ -102,15 +102,15 @@
           </div>
         </div>
         <div class="review-toolbar">
+          <label class="select-all-label">
+            <input type="checkbox" id="select-all-approved" onchange="toggleSelectAll('approved')"> Select all
+          </label>
           <div class="bulk-actions" id="bulk-actions-approved" style="display:none">
             <span id="selected-count-approved" class="badge"></span>
             <button class="btn btn-secondary btn-sm" onclick="bulkAction('approved','requeue')">↻ Re-queue</button>
             <button class="btn btn-secondary btn-sm" id="bulk-select-all-approved" onclick="selectAllVisible('approved')" style="display:none">☑ Select All</button>
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('approved')">✕ Clear</button>
           </div>
-          <label class="select-all-label">
-            <input type="checkbox" id="select-all-approved" onchange="toggleSelectAll('approved')"> Select all
-          </label>
         </div>
         <div id="approved-empty" class="empty-state" style="display:none"><p>No approved items yet.</p></div>
         <div id="approved-grid" class="sheets-grid"></div>
@@ -126,6 +126,9 @@
           </div>
         </div>
         <div class="review-toolbar">
+          <label class="select-all-label">
+            <input type="checkbox" id="select-all-quarantined" onchange="toggleSelectAll('quarantined')"> Select all
+          </label>
           <div class="bulk-actions" id="bulk-actions-quarantined" style="display:none">
             <span id="selected-count-quarantined" class="badge"></span>
             <button class="btn btn-success btn-sm" onclick="bulkAction('quarantined','approve')">✓ Restore</button>
@@ -133,9 +136,6 @@
             <button class="btn btn-secondary btn-sm" id="bulk-select-all-quarantined" onclick="selectAllVisible('quarantined')" style="display:none">☑ Select All</button>
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('quarantined')">✕ Clear</button>
           </div>
-          <label class="select-all-label">
-            <input type="checkbox" id="select-all-quarantined" onchange="toggleSelectAll('quarantined')"> Select all
-          </label>
         </div>
         <div id="quarantined-empty" class="empty-state" style="display:none"><p>Quarantine is empty.</p></div>
         <div id="quarantined-grid" class="sheets-grid"></div>
@@ -177,6 +177,39 @@
           <section class="config-section">
             <h2>NSFW Detection</h2>
             <p class="hint">Every new video is automatically scanned using local on-device detection. Results are mapped to zones that determine what happens to each file.</p>
+            <label>Detection Profile</label>
+            <div class="profile-selector">
+              <label class="profile-option">
+                <input type="radio" name="detection-profile" value="conservative" onchange="applyProfile(this.value)">
+                <span class="profile-label">
+                  <span class="profile-name">Conservative</span>
+                  <span class="profile-desc">Catches more, higher false positives</span>
+                </span>
+              </label>
+              <label class="profile-option">
+                <input type="radio" name="detection-profile" value="balanced" onchange="applyProfile(this.value)" checked>
+                <span class="profile-label">
+                  <span class="profile-name">Balanced</span>
+                  <span class="profile-desc">Recommended default</span>
+                </span>
+              </label>
+              <label class="profile-option">
+                <input type="radio" name="detection-profile" value="aggressive" onchange="applyProfile(this.value)">
+                <span class="profile-label">
+                  <span class="profile-name">Aggressive</span>
+                  <span class="profile-desc">Higher thresholds, fewer flags</span>
+                </span>
+              </label>
+              <label class="profile-option">
+                <input type="radio" name="detection-profile" value="custom" onchange="applyProfile(this.value)">
+                <span class="profile-label">
+                  <span class="profile-name">Custom</span>
+                  <span class="profile-desc">Set your own thresholds below</span>
+                </span>
+              </label>
+            </div>
+
+            <div id="zone-custom-section">
             <div class="zone-diagram">
               <div class="zone zone-approve">Auto-approve</div>
               <div class="zone-arrow">▶</div>
@@ -203,6 +236,7 @@
                 <span class="hint">Above this score, video deleted immediately</span>
               </div>
             </div>
+            </div><!-- end zone-custom-section -->
             <label style="margin-top:16px">Frames to sample per video</label>
             <p class="hint">More frames means better coverage with slightly longer processing. 10 is a good default.</p>
             <input type="number" id="cfg-nudenet-frames" class="input-short" min="1" max="30">

@@ -541,7 +541,13 @@ function clearSearch() {
 async function loadConfig() {
   var res = await fetch("/api/config");
   var cfg = await res.json();
-  document.getElementById("cfg-zone-approve").value         = cfg.zone_auto_approve  != null ? cfg.zone_auto_approve  : 0.2;
+  // Set profile radio
+  var profile = cfg.detection_profile || "balanced";
+  var profileRadio = document.querySelector("input[name='detection-profile'][value='" + profile + "']");
+  if (profileRadio) profileRadio.checked = true;
+  applyProfile(profile);
+
+  document.getElementById("cfg-zone-approve").value         = cfg.zone_auto_approve  != null ? cfg.zone_auto_approve  : 0.4;
   document.getElementById("cfg-zone-quarantine").value      = cfg.zone_quarantine     != null ? cfg.zone_quarantine     : 0.5;
   document.getElementById("cfg-zone-reject").value          = cfg.zone_auto_reject    != null ? cfg.zone_auto_reject    : 0.9;
   document.getElementById("cfg-nudenet-frames").value       = cfg.nudenet_frames      || 10;
@@ -564,10 +570,32 @@ async function loadConfig() {
   checkArrKeys();
 }
 
+// ── Detection profiles ───────────────────────────────────────────
+var PROFILES = {
+  conservative: {zone_auto_approve: 0.2, zone_quarantine: 0.55, zone_auto_reject: 0.85},
+  balanced:     {zone_auto_approve: 0.4, zone_quarantine: 0.6,  zone_auto_reject: 0.85},
+  aggressive:   {zone_auto_approve: 0.55,zone_quarantine: 0.65, zone_auto_reject: 0.85},
+};
+
+function applyProfile(profile) {
+  var customSection = document.getElementById("zone-custom-section");
+  if (profile === "custom") {
+    if (customSection) customSection.style.display = "block";
+    return;
+  }
+  if (customSection) customSection.style.display = "none";
+  var p = PROFILES[profile];
+  if (!p) return;
+  document.getElementById("cfg-zone-approve").value    = p.zone_auto_approve;
+  document.getElementById("cfg-zone-quarantine").value = p.zone_quarantine;
+  document.getElementById("cfg-zone-reject").value     = p.zone_auto_reject;
+}
+
 async function saveConfig() {
   var folders = document.getElementById("cfg-watch-folders").value
     .split("\n").map(function(s) { return s.trim(); }).filter(Boolean);
   var payload = {
+    detection_profile:           (document.querySelector("input[name='detection-profile']:checked") || {value:"balanced"}).value,
     zone_auto_approve:           parseFloat(document.getElementById("cfg-zone-approve").value),
     zone_quarantine:             parseFloat(document.getElementById("cfg-zone-quarantine").value),
     zone_auto_reject:            parseFloat(document.getElementById("cfg-zone-reject").value),
@@ -759,7 +787,7 @@ function openLightbox(src, tab, idx) {
         confHtml +
         labelsHtml +
         actionsHtml +
-        '<div class="lb-hint">← → navigate &nbsp;·&nbsp; Esc close' + (actionsHtml ? ' &nbsp;·&nbsp; A / R' : '') + '</div>' +
+        '<div class="lb-hint">← → navigate &nbsp;·&nbsp; Esc close' + (tab === "quarantined" ? ' &nbsp;·&nbsp; R restore &nbsp;·&nbsp; D delete' : (actionsHtml ? ' &nbsp;·&nbsp; A approve &nbsp;·&nbsp; R reject' : '')) + '</div>' +
       '</div>' +
     '</div>';
 
@@ -785,10 +813,35 @@ function lightboxNav(dir) {
 
 async function lightboxAction(action) {
   if (_lightboxTab == null || _lightboxIdx == null) return;
-  var idx = _lightboxIdx, tab = _lightboxTab;
-  closeLightbox();
-  if (action === "reject") confirmSingle(tab, "reject", idx);
-  else await singleAction(tab, "approve", idx);
+  var idx  = _lightboxIdx;
+  var tab  = _lightboxTab;
+  var next = idx < _lightboxTotal - 1 ? idx + 1 : (idx > 0 ? idx - 1 : null);
+
+  if (action === "reject") {
+    // Confirm then advance
+    showModal(
+      "Confirm Deletion",
+      "This will permanently delete the source video. This cannot be undone.",
+      async function() {
+        closeModal();
+        closeLightbox();
+        await singleAction(tab, "reject", idx);
+        // Advance to next if available
+        if (next != null && tabSheets[tab] && tabSheets[tab][next] && tabSheets[tab][next].has_sheet) {
+          var s = "/api/sheets/image/" + encodeURIComponent(tabSheets[tab][next].filename);
+          openLightbox(s, tab, next);
+        }
+      }
+    );
+  } else {
+    closeLightbox();
+    await singleAction(tab, "approve", idx);
+    // Advance to next if available
+    if (next != null && tabSheets[tab] && tabSheets[tab][next] && tabSheets[tab][next].has_sheet) {
+      var s2 = "/api/sheets/image/" + encodeURIComponent(tabSheets[tab][next].filename);
+      openLightbox(s2, tab, next);
+    }
+  }
 }
 
 document.addEventListener("keydown", function(e) {
@@ -796,8 +849,14 @@ document.addEventListener("keydown", function(e) {
   if (e.key === "Escape")     { closeLightbox(); return; }
   if (e.key === "ArrowLeft")  { lightboxNav(-1); return; }
   if (e.key === "ArrowRight") { lightboxNav(1);  return; }
-  if (e.key === "a" || e.key === "A") { lightboxAction("approve"); return; }
-  if (e.key === "r" || e.key === "R") { lightboxAction("reject");  return; }
+  // Shortcuts differ by tab
+  if (_lightboxTab === "quarantined") {
+    if (e.key === "r" || e.key === "R") { lightboxAction("approve"); return; } // Restore
+    if (e.key === "d" || e.key === "D") { lightboxAction("reject");  return; } // Delete
+  } else {
+    if (e.key === "a" || e.key === "A") { lightboxAction("approve"); return; } // Approve
+    if (e.key === "r" || e.key === "R") { lightboxAction("reject");  return; } // Reject
+  }
 });
 
 function revealImage(el, src) {
