@@ -88,6 +88,7 @@ async function loadPage(tab, resetPage) {
   var search = (document.getElementById("global-search") || {value:""}).value || "";
   var url    = "/api/sheets?state=" + tab + "&search=" + encodeURIComponent(search.toLowerCase());
   if (tab === "approved" && approvedSourceFilter) url += "&source=" + approvedSourceFilter;
+  var res = await fetch(url);
   tabSheets[tab] = await res.json();
   selections[tab].clear();
   if (!window._stems) window._stems = {};
