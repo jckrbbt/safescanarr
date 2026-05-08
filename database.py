@@ -257,9 +257,9 @@ class Database:
             if state == "quarantined":
                 continue
 
-            if not path.exists() and not in_watch:
-                # Delete VCS sheet for approved items
-                if state == "approved" and output_dir:
+            if not path.exists() or not in_watch:
+                # Delete VCS sheet alongside the record (rejected sheets are kept as audit trail)
+                if state != "rejected" and output_dir:
                     stem  = path.stem
                     sheet = Path(output_dir) / (stem + ".jpg")
                     if sheet.exists():
