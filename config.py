@@ -34,6 +34,7 @@ _DEFAULTS = {
     "quarantine_auto_reject_days": 0, # 0 = never auto-reject, >0 = reject after N days
     # Webhook
     "webhook_url":             "",
+    "webhook_on_review":       False,
     "webhook_on_quarantine":   True,
     "webhook_on_reject":       True,
     # VCS
@@ -97,6 +98,7 @@ def _load() -> dict:
         "quarantine_dir":        "",
         "quarantine_auto_reject_days": 0,
         "webhook_url":           "",
+        "webhook_on_review":     False,
         "webhook_on_quarantine": True,
         "webhook_on_reject":     True,
         "vcs_grid":              os.environ.get("VCS_GRID", _DEFAULTS["vcs_grid"]),
@@ -154,6 +156,7 @@ class Config:
         self.QUARANTINE_AUTO_REJECT_DAYS = int(cfg.get("quarantine_auto_reject_days", 0))
         # Webhook
         self.WEBHOOK_URL             = cfg.get("webhook_url", "")
+        self.WEBHOOK_ON_REVIEW       = cfg.get("webhook_on_review", False)
         self.WEBHOOK_ON_QUARANTINE   = cfg.get("webhook_on_quarantine", True)
         self.WEBHOOK_ON_REJECT       = cfg.get("webhook_on_reject", True)
         # VCS

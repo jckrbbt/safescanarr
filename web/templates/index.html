@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Safe Scanarr</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -12,7 +13,7 @@
   <header class="topbar">
     <div class="topbar-brand">
       <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
-      <span class="nav-logo">🛡️</span>
+      <img src="/static/logo-sm.png" class="nav-logo-img" alt="Safe Scanarr">
       <span class="nav-title">Safe Scanarr</span>
       <span class="nav-version" id="nav-version"></span>
     </div>
@@ -53,6 +54,10 @@
         </a>
         <div class="sidebar-divider"></div>
         <div class="sidebar-section-label">System</div>
+        <a href="#" class="sidebar-link" data-page="stats">
+          <span class="sidebar-icon">📊</span>
+          <span>Stats</span>
+        </a>
         <a href="#" class="sidebar-link" data-page="config">
           <span class="sidebar-icon">⚙</span>
           <span>Config</span>
@@ -80,6 +85,14 @@
           <label class="select-all-label">
             <input type="checkbox" id="select-all-pending" onchange="toggleSelectAll('pending')"> Select all
           </label>
+          <div class="sort-control">
+            <select class="select select-sm" onchange="sortTab('pending', this.value)">
+              <option value="risk">Risk score</option>
+              <option value="title">Title</option>
+              <option value="date">Date scanned</option>
+              <option value="size">File size</option>
+            </select>
+          </div>
           <div class="bulk-actions" id="bulk-actions-pending" style="display:none">
             <span id="selected-count-pending" class="badge"></span>
             <button class="btn btn-success btn-sm" onclick="bulkAction('pending','approve')">✓ Approve</button>
@@ -105,6 +118,14 @@
           <label class="select-all-label">
             <input type="checkbox" id="select-all-approved" onchange="toggleSelectAll('approved')"> Select all
           </label>
+          <div class="sort-control">
+            <select class="select select-sm" onchange="sortTab('approved', this.value)">
+              <option value="risk">Risk score</option>
+              <option value="title">Title</option>
+              <option value="date">Date scanned</option>
+              <option value="size">File size</option>
+            </select>
+          </div>
           <div class="bulk-actions" id="bulk-actions-approved" style="display:none">
             <span id="selected-count-approved" class="badge"></span>
             <button class="btn btn-secondary btn-sm" onclick="bulkAction('approved','requeue')">↻ Re-queue</button>
@@ -129,6 +150,14 @@
           <label class="select-all-label">
             <input type="checkbox" id="select-all-quarantined" onchange="toggleSelectAll('quarantined')"> Select all
           </label>
+          <div class="sort-control">
+            <select class="select select-sm" onchange="sortTab('quarantined', this.value)">
+              <option value="risk">Risk score</option>
+              <option value="title">Title</option>
+              <option value="date">Date scanned</option>
+              <option value="size">File size</option>
+            </select>
+          </div>
           <div class="bulk-actions" id="bulk-actions-quarantined" style="display:none">
             <span id="selected-count-quarantined" class="badge"></span>
             <button class="btn btn-success btn-sm" onclick="bulkAction('quarantined','approve')">✓ Restore</button>
@@ -147,20 +176,41 @@
           <h1>Rejected</h1>
           <div class="header-actions">
             <span id="rejected-count" class="badge"></span>
-            <div class="bulk-actions" id="bulk-actions-rejected" style="display:none">
-              <span id="selected-count-rejected" class="badge"></span>
-              <button class="btn btn-secondary btn-sm" onclick="bulkAction('rejected','remove-rejected')">🗑 Remove Entry</button>
-              <button class="btn btn-secondary btn-sm" id="bulk-select-all-rejected" onclick="selectAllVisible('rejected')" style="display:none">☑ Select All</button>
-              <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
-            </div>
-            <label class="select-all-label">
-              <input type="checkbox" id="select-all-rejected" onchange="toggleSelectAll('rejected')"> Select all
-            </label>
             <button class="btn btn-secondary" onclick="loadPage('rejected')">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="review-toolbar">
+          <label class="select-all-label">
+            <input type="checkbox" id="select-all-rejected" onchange="toggleSelectAll('rejected')"> Select all
+          </label>
+          <div class="bulk-actions" id="bulk-actions-rejected" style="display:none">
+            <span id="selected-count-rejected" class="badge"></span>
+            <button class="btn btn-secondary btn-sm" onclick="bulkAction('rejected','remove-rejected')">🗑 Remove Entry</button>
+            <button class="btn btn-secondary btn-sm" id="bulk-select-all-rejected" onclick="selectAllVisible('rejected')" style="display:none">☑ Select All</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
+          </div>
+          <div class="sort-control">
+            <select class="select select-sm" onchange="sortTab('rejected', this.value)">
+              <option value="risk">Risk score</option>
+              <option value="title">Title</option>
+              <option value="date">Date scanned</option>
+              <option value="size">File size</option>
+            </select>
           </div>
         </div>
         <div id="rejected-empty" class="empty-state" style="display:none"><p>No rejected items.</p></div>
         <div id="rejected-grid" class="sheets-grid"></div>
+      </div>
+
+      <!-- ── STATS ─────────────────────────────────────────── -->
+      <div id="page-stats" class="page">
+        <div class="page-header">
+          <h1>Lifetime Stats</h1>
+          <div class="header-actions">
+            <button class="btn btn-secondary" onclick="loadStats(); loadStatsPage()">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="stats-content" class="stats-grid"></div>
       </div>
 
       <!-- ── CONFIG ────────────────────────────────────────── -->
@@ -334,7 +384,10 @@
               <button class="btn btn-secondary" onclick="testWebhook()" id="test-webhook-btn">Test</button>
             </div>
             <div id="test-webhook-result" class="test-result"></div>
-            <div style="margin-top:12px;display:flex;gap:20px">
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="cfg-webhook-review"> Notify when items are added to Review queue
+              </label>
               <label class="checkbox-label">
                 <input type="checkbox" id="cfg-webhook-quarantine"> Notify on quarantine
               </label>

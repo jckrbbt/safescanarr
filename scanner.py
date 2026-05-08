@@ -181,9 +181,11 @@ def action_reject(video_path: Path, cfg, db: Database,
 def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
     if not cfg.WEBHOOK_URL:
         return
+    if event == "review"      and not cfg.WEBHOOK_ON_REVIEW:
+        return
     if event == "quarantined" and not cfg.WEBHOOK_ON_QUARANTINE:
         return
-    if event == "rejected" and not cfg.WEBHOOK_ON_REJECT:
+    if event == "rejected"    and not cfg.WEBHOOK_ON_REJECT:
         return
 
     labels = [h["label"] for h in (nudenet_result.get("labels") or [])]
@@ -208,33 +210,135 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
         log.warning("Webhook failed: %s", e)
 
 
+def _api_request(url: str, api_key: str, method: str = "GET", body: dict = None):
+    """Make an API request and return parsed JSON or None on failure."""
+    data    = json.dumps(body).encode() if body else None
+    headers = {"X-Api-Key": api_key, "Accept": "application/json"}
+    if data:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except Exception:
+        return None
+
+
 def _blacklist(file_path: str, cfg) -> None:
+    """
+    Full removal flow for each configured service:
+      1. Find the episode/movie file ID by matching path
+      2. Delete the file from the library
+      3. Blacklist the release to prevent re-download
+      4. Trigger a new search for a replacement
+    """
     for service in ("sonarr", "radarr"):
         base    = cfg.SONARR_URL.rstrip("/") if service == "sonarr" else cfg.RADARR_URL.rstrip("/")
         api_key = cfg.SONARR_API_KEY        if service == "sonarr" else cfg.RADARR_API_KEY
         if not api_key:
             continue
         try:
-            url = f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3"
-            req = urllib.request.Request(url, headers={"X-Api-Key": api_key, "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read())
-            history_id = None
-            for record in data.get("records", []):
-                p = (record.get("data") or {}).get("importedPath", "")
-                if p == file_path:
-                    history_id = record.get("id")
-                    break
-            if history_id:
-                req2 = urllib.request.Request(
-                    f"{base}/api/v3/blacklist/{history_id}",
-                    method="DELETE",
-                    headers={"X-Api-Key": api_key},
-                )
-                urllib.request.urlopen(req2, timeout=10)
-                log.info("Blacklisted in %s (history id %s)", service, history_id)
+            if service == "sonarr":
+                _arr_remove_sonarr(base, api_key, file_path)
+            else:
+                _arr_remove_radarr(base, api_key, file_path)
         except Exception as e:
-            log.warning("Blacklist failed for %s: %s", service, e)
+            log.warning("Arr removal failed for %s: %s", service, e)
+
+
+def _arr_remove_sonarr(base: str, api_key: str, file_path: str) -> None:
+    # Step 1: Find episode file ID matching path
+    ep_files = _api_request(f"{base}/api/v3/episodefile", api_key) or []
+    ep_file_id  = None
+    episode_id  = None
+    series_id   = None
+    release_group = None
+
+    for ef in ep_files:
+        if ef.get("path", "") == file_path:
+            ep_file_id    = ef.get("id")
+            series_id     = ef.get("seriesId")
+            release_group = ef.get("releaseGroup", "")
+            # Get episode ID from the file's episodes
+            eps = ef.get("episodeFileId") or []
+            break
+
+    if not ep_file_id:
+        log.warning("Sonarr: no episode file found for %s", file_path)
+        return
+
+    # Step 2: Get episode IDs for this file
+    episodes = _api_request(
+        f"{base}/api/v3/episode?seriesId={series_id}&episodeFileId={ep_file_id}",
+        api_key
+    ) or []
+    episode_ids = [e["id"] for e in episodes if "id" in e]
+
+    # Step 3: Delete the file from Sonarr library
+    result = _api_request(f"{base}/api/v3/episodefile/{ep_file_id}", api_key, method="DELETE")
+    log.info("Sonarr: deleted episodefile %d", ep_file_id)
+
+    # Step 4: Blacklist via history
+    history = _api_request(
+        f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3",
+        api_key
+    ) or {}
+    for record in history.get("records", []):
+        if (record.get("data") or {}).get("importedPath", "") == file_path:
+            _api_request(
+                f"{base}/api/v3/blacklist/{record['id']}",
+                api_key, method="DELETE"
+            )
+            log.info("Sonarr: blacklisted history record %d", record["id"])
+            break
+
+    # Step 5: Trigger new search
+    if episode_ids:
+        _api_request(f"{base}/api/v3/command", api_key, method="POST",
+                     body={"name": "EpisodeSearch", "episodeIds": episode_ids})
+        log.info("Sonarr: triggered EpisodeSearch for episode ids %s", episode_ids)
+
+
+def _arr_remove_radarr(base: str, api_key: str, file_path: str) -> None:
+    # Step 1: Find movie file ID matching path
+    movie_files = _api_request(f"{base}/api/v3/moviefile", api_key) or []
+    movie_file_id = None
+    movie_id      = None
+
+    for mf in movie_files:
+        if mf.get("path", "") == file_path:
+            movie_file_id = mf.get("id")
+            movie_id      = mf.get("movieId")
+            break
+
+    if not movie_file_id:
+        log.warning("Radarr: no movie file found for %s", file_path)
+        return
+
+    # Step 2: Delete the file from Radarr library
+    _api_request(f"{base}/api/v3/moviefile/{movie_file_id}", api_key, method="DELETE")
+    log.info("Radarr: deleted moviefile %d", movie_file_id)
+
+    # Step 3: Blacklist via history
+    history = _api_request(
+        f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3",
+        api_key
+    ) or {}
+    for record in history.get("records", []):
+        if (record.get("data") or {}).get("importedPath", "") == file_path:
+            _api_request(
+                f"{base}/api/v3/blacklist/{record['id']}",
+                api_key, method="DELETE"
+            )
+            log.info("Radarr: blacklisted history record %d", record["id"])
+            break
+
+    # Step 4: Trigger new search
+    if movie_id:
+        _api_request(f"{base}/api/v3/command", api_key, method="POST",
+                     body={"name": "MoviesSearch", "movieIds": [movie_id]})
+        log.info("Radarr: triggered MoviesSearch for movie id %d", movie_id)
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +420,10 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
     )
     if quarantine_path:
         db.set_review_state(abs_path, "quarantined", quarantine_path=quarantine_path)
+
+    # Fire review webhook if item landed in pending
+    if state == "pending":
+        _send_webhook(cfg, "review", abs_path, nudenet_result)
 
 
 def _stop_requested(db: Database) -> bool:

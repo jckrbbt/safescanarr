@@ -46,12 +46,19 @@ def api_stats():
     return jsonify(get_db().get_stats())
 
 
+# ── Lifetime stats ───────────────────────────────────────────────
+@app.route("/api/stats/full")
+def api_stats_full():
+    return jsonify(get_db().get_stats_full())
+
+
 # ── Sheets by state ───────────────────────────────────────────────
 @app.route("/api/sheets")
 def api_sheets():
     cfg        = Config()
     state      = request.args.get("state", "pending")
     search     = request.args.get("search", "").lower()
+    source     = request.args.get("source", "")  # "auto", "user", or "" for all
     output_dir = Path(cfg.OUTPUT_DIR)
     sheets     = []
 
@@ -59,6 +66,8 @@ def api_sheets():
     for row in rows:
         stem = Path(row["path"]).stem
         if search and search not in stem.lower() and search not in row["path"].lower():
+            continue
+        if source and row.get("state_source") != source:
             continue
         sheet_file = output_dir / (stem + ".jpg")
         sheets.append({
@@ -73,11 +82,9 @@ def api_sheets():
             "quarantine_path": row["quarantine_path"],
             "state_updated_at": row["state_updated_at"],
             "updated_at":      row["updated_at"],
+            "size":            row["size"],
+            "state_source":    row["state_source"],
         })
-
-    # Pending: sort flagged/high-confidence first
-    if state == "pending":
-        sheets.sort(key=lambda s: -(s["nsfw_confidence"] or 0))
 
     return jsonify(sheets)
 
@@ -222,6 +229,7 @@ def api_config_save():
         existing["quarantine_auto_reject_days"]= int(existing.get("quarantine_auto_reject_days", 0))
         existing["polling_enabled"]            = bool(existing.get("polling_enabled", False))
         existing["scan_schedule_enabled"]      = bool(existing.get("scan_schedule_enabled", False))
+        existing["webhook_on_review"]          = bool(existing.get("webhook_on_review", False))
         existing["webhook_on_quarantine"]      = bool(existing.get("webhook_on_quarantine", True))
         existing["webhook_on_reject"]          = bool(existing.get("webhook_on_reject", True))
         if isinstance(existing.get("watch_folders"), str):
@@ -278,10 +286,10 @@ def api_test_webhook():
 
 @app.route("/api/db/clean", methods=["POST"])
 def api_db_clean():
-    cfg     = Config()
-    db      = get_db()
-    removed = db.clean_missing_files(cfg.WATCH_FOLDERS)
-    return jsonify({"status": "ok", "removed": removed})
+    cfg    = Config()
+    db     = get_db()
+    result = db.clean_missing_files(cfg.WATCH_FOLDERS, output_dir=cfg.OUTPUT_DIR)
+    return jsonify({"status": "ok", "removed": result["records"], "sheets": result["sheets"]})
 
 
 @app.route("/api/scan/status")
@@ -388,30 +396,96 @@ def _api_get(url: str, api_key: str):
         return None
 
 
+def _api_post(url: str, api_key: str, body: dict = None):
+    """POST to an arr API endpoint."""
+    data    = json.dumps(body).encode() if body else b""
+    headers = {"X-Api-Key": api_key, "Accept": "application/json", "Content-Type": "application/json"}
+    req     = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def _api_delete(url: str, api_key: str):
+    req = urllib.request.Request(
+        url, headers={"X-Api-Key": api_key}, method="DELETE"
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return True
+    except Exception:
+        return False
+
+
 def _blacklist_path(file_path: str, cfg: Config) -> None:
+    """Full removal flow: delete from library, blacklist, trigger new search."""
     for service in ("sonarr", "radarr"):
         base    = cfg.SONARR_URL.rstrip("/") if service == "sonarr" else cfg.RADARR_URL.rstrip("/")
         api_key = cfg.SONARR_API_KEY        if service == "sonarr" else cfg.RADARR_API_KEY
         if not api_key:
             continue
         try:
-            data = _api_get(
-                f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3",
-                api_key
-            )
-            if not data:
-                continue
-            for record in data.get("records", []):
-                p = (record.get("data") or {}).get("importedPath", "")
-                if p == file_path:
-                    req = urllib.request.Request(
-                        f"{base}/api/v3/blacklist/{record['id']}",
-                        method="DELETE", headers={"X-Api-Key": api_key}
-                    )
-                    urllib.request.urlopen(req, timeout=10)
-                    break
+            if service == "sonarr":
+                # Find episode file
+                ep_files = _api_get(f"{base}/api/v3/episodefile", api_key) or []
+                ep_file_id = None
+                series_id  = None
+                for ef in ep_files:
+                    if ef.get("path", "") == file_path:
+                        ep_file_id = ef.get("id")
+                        series_id  = ef.get("seriesId")
+                        break
+                if not ep_file_id:
+                    continue
+                # Get episode IDs
+                episodes   = _api_get(f"{base}/api/v3/episode?seriesId={series_id}&episodeFileId={ep_file_id}", api_key) or []
+                episode_ids = [e["id"] for e in episodes if "id" in e]
+                # Delete from library
+                _api_delete(f"{base}/api/v3/episodefile/{ep_file_id}", api_key)
+                log.info("Sonarr: deleted episodefile %d", ep_file_id)
+                # Blacklist history record
+                history = _api_get(f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3", api_key) or {}
+                for record in history.get("records", []):
+                    if (record.get("data") or {}).get("importedPath", "") == file_path:
+                        _api_delete(f"{base}/api/v3/blacklist/{record['id']}", api_key)
+                        log.info("Sonarr: blacklisted record %d", record["id"])
+                        break
+                # Trigger new search
+                if episode_ids:
+                    _api_post(f"{base}/api/v3/command", api_key, {"name": "EpisodeSearch", "episodeIds": episode_ids})
+                    log.info("Sonarr: triggered EpisodeSearch for %s", episode_ids)
+
+            else:  # radarr
+                # Find movie file
+                movie_files = _api_get(f"{base}/api/v3/moviefile", api_key) or []
+                movie_file_id = None
+                movie_id      = None
+                for mf in movie_files:
+                    if mf.get("path", "") == file_path:
+                        movie_file_id = mf.get("id")
+                        movie_id      = mf.get("movieId")
+                        break
+                if not movie_file_id:
+                    continue
+                # Delete from library
+                _api_delete(f"{base}/api/v3/moviefile/{movie_file_id}", api_key)
+                log.info("Radarr: deleted moviefile %d", movie_file_id)
+                # Blacklist history record
+                history = _api_get(f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3", api_key) or {}
+                for record in history.get("records", []):
+                    if (record.get("data") or {}).get("importedPath", "") == file_path:
+                        _api_delete(f"{base}/api/v3/blacklist/{record['id']}", api_key)
+                        log.info("Radarr: blacklisted record %d", record["id"])
+                        break
+                # Trigger new search
+                if movie_id:
+                    _api_post(f"{base}/api/v3/command", api_key, {"name": "MoviesSearch", "movieIds": [movie_id]})
+                    log.info("Radarr: triggered MoviesSearch for movie %d", movie_id)
+
         except Exception as e:
-            log.warning("Blacklist failed for %s: %s", service, e)
+            log.warning("Arr removal failed for %s/%s: %s", service, file_path, e)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ let statsTimer    = null;
 let scanPollTimer = null;
 let scanRunning   = false;
 let pageSize      = 20;
+let tabSort       = {pending: "risk", approved: "title", quarantined: "risk", rejected: "date"};
+let approvedSourceFilter = "";
 let tabPage       = {};
 
 TABS.forEach(function(t) {
@@ -53,6 +55,7 @@ function navigateTo(page) {
   if (TABS.includes(page)) loadPage(page);
   if (page === "config")   loadConfig();
   if (page === "logs")     loadLogs();
+  if (page === "stats")    loadStatsPage();
 }
 
 // ── Version ───────────────────────────────────────────────────────
@@ -83,13 +86,42 @@ async function loadStats() {
 async function loadPage(tab, resetPage) {
   if (resetPage) tabPage[tab] = 1;
   var search = (document.getElementById("global-search") || {value:""}).value || "";
-  var res    = await fetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(search.toLowerCase()));
+  var url    = "/api/sheets?state=" + tab + "&search=" + encodeURIComponent(search.toLowerCase());
+  if (tab === "approved" && approvedSourceFilter) url += "&source=" + approvedSourceFilter;
   tabSheets[tab] = await res.json();
   selections[tab].clear();
   if (!window._stems) window._stems = {};
   window._stems[tab] = {};
   renderTab(tab);
   updateBulkBar(tab);
+}
+
+function filterApproved(source) {
+  approvedSourceFilter = source;
+  tabPage["approved"] = 1;
+  loadPage("approved");
+}
+
+function sortTab(tab, sortBy) {
+  tabSort[tab] = sortBy;
+  tabPage[tab] = 1;
+  if (!window._stems) window._stems = {};
+  window._stems[tab] = {};
+  renderTab(tab);
+}
+
+function applySortOrder(sheets, sortBy) {
+  var sorted = sheets.slice();
+  if (sortBy === "risk") {
+    sorted.sort(function(a, b) { return (b.nsfw_confidence || 0) - (a.nsfw_confidence || 0); });
+  } else if (sortBy === "title") {
+    sorted.sort(function(a, b) { return a.stem.localeCompare(b.stem); });
+  } else if (sortBy === "date") {
+    sorted.sort(function(a, b) { return new Date(b.updated_at || 0) - new Date(a.updated_at || 0); });
+  } else if (sortBy === "size") {
+    sorted.sort(function(a, b) { return (b.size || 0) - (a.size || 0); });
+  }
+  return sorted;
 }
 
 function renderTab(tab) {
@@ -104,6 +136,10 @@ function renderTab(tab) {
     return;
   }
   if (empty) empty.style.display = "none";
+
+  // Apply sort
+  var sortBy = tabSort[tab] || "risk";
+  sheets = applySortOrder(sheets, sortBy);
 
   var page      = tabPage[tab] || 1;
   var total     = sheets.length;
@@ -120,7 +156,7 @@ function renderTab(tab) {
 
     var isApproved = tab === "approved";
     var isRejected = tab === "rejected";
-    var showNsfw   = sheet.flagged && !isApproved;
+    var showNsfw   = sheet.flagged && !isApproved && tab !== "quarantined" && tab !== "rejected";
     var checked    = selections[tab].has(sheet.stem) ? "checked" : "";
 
     var card = document.createElement("div");
@@ -130,10 +166,11 @@ function renderTab(tab) {
 
     // Confidence badge
     var confBadge = "";
-    if (sheet.nsfw_confidence != null && !isApproved) {
+    if (sheet.nsfw_confidence != null) {
       var pct = Math.round(sheet.nsfw_confidence * 100);
-      var tip = sheet.flag_reason ? sheet.flag_reason.replace(/"/g, "&quot;") : "NSFW detected";
-      confBadge = '<span class="conf-badge" title="' + tip + '">' + pct + '%</span>';
+      var tip = sheet.flag_reason ? sheet.flag_reason.replace(/"/g, "&quot;") : (pct === 0 ? "No risk detected" : "NSFW detected");
+      var badgeColor = isApproved ? "var(--text-dim)" : "";
+      confBadge = '<span class="risk-badge' + (isApproved ? ' risk-badge-clean' : '') + '" title="' + tip + '">' + pct + '% risk</span>';
     }
 
     // Label chips (deduped)
@@ -476,12 +513,12 @@ async function onGlobalSearch() {
       window._stems[sec.tab][idx] = sheet.stem;
       var isApproved = sec.tab === "approved";
       var isRejected = sec.tab === "rejected";
-      var showNsfw   = sheet.flagged && !isApproved;
+      var showNsfw   = sheet.flagged && !isApproved && sec.tab !== "quarantined" && sec.tab !== "rejected";
 
       var confBadge = "";
-      if (sheet.nsfw_confidence != null && !isApproved) {
+      if (sheet.nsfw_confidence != null) {
         var pct2 = Math.round(sheet.nsfw_confidence * 100);
-        confBadge = '<span class="conf-badge">' + pct2 + '%</span>';
+        confBadge = '<span class="risk-badge' + (isApproved ? ' risk-badge-clean' : '') + '">' + pct2 + '% risk</span>';
       }
 
       var imgHtml2 = '<div class="sheet-img-placeholder">No sheet</div>';
@@ -537,6 +574,78 @@ function clearSearch() {
   navigateTo("pending");
 }
 
+// ── Stats page ───────────────────────────────────────────────────
+async function loadStatsPage() {
+  var container = document.getElementById("stats-content");
+  if (!container) return;
+  container.innerHTML = '<p style="color:var(--text-dim);padding:20px 0">Loading...</p>';
+
+  var res   = await fetch("/api/stats/full");
+  var stats = await res.json();
+
+  var by     = stats.by_state   || {};
+  var bd     = stats.breakdown  || {};
+  var labels = stats.top_labels || [];
+  var total  = stats.total      || 0;
+
+  function pct(n) { return total > 0 ? Math.round(n / total * 100) : 0; }
+  function card(title, value, sub, color) {
+    return '<div class="stat-card">' +
+      '<div class="stat-value" style="color:' + (color || "var(--text)") + '">' + value + '</div>' +
+      '<div class="stat-title">' + title + '</div>' +
+      (sub ? '<div class="stat-sub">' + sub + '</div>' : '') +
+    '</div>';
+  }
+
+  // Summary cards row
+  var summary =
+    card("Total Scanned",  total, "", "var(--text)") +
+    card("Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
+    card("Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
+    card("Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
+    card("Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)") +
+    card("Flagged",   stats.total_flagged || 0, pct(stats.total_flagged || 0) + "% of total", "var(--danger)");
+
+  // Auto vs manual breakdown
+  var autoApproved   = bd["approved_auto"]  || 0;
+  var manualApproved = bd["approved_user"]  || 0;
+  var autoRejected   = bd["rejected_auto"]  || 0;
+  var manualRejected = bd["rejected_user"]  || 0;
+
+  var breakdown =
+    '<div class="stats-section-title">Auto vs Manual</div>' +
+    '<div class="stat-row"><span class="stat-row-label">Auto-approved</span><span class="stat-row-value">' + autoApproved + '</span></div>' +
+    '<div class="stat-row"><span class="stat-row-label">Manually approved</span><span class="stat-row-value">' + manualApproved + '</span></div>' +
+    '<div class="stat-row"><span class="stat-row-label">Auto-rejected</span><span class="stat-row-value">' + autoRejected + '</span></div>' +
+    '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>' +
+    (stats.avg_risk_flagged > 0 ? '<div class="stat-row"><span class="stat-row-label">Avg risk score (flagged)</span><span class="stat-row-value">' + Math.round(stats.avg_risk_flagged * 100) + '%</span></div>' : '');
+
+  // Top labels
+  var labelsHtml = '<div class="stats-section-title">Most Common Detections</div>';
+  if (labels.length === 0) {
+    labelsHtml += '<p class="stat-empty">No detections recorded yet.</p>';
+  } else {
+    var maxCount = labels[0][1] || 1;
+    labelsHtml += labels.map(function(l) {
+      var name  = l[0].replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, function(c) { return c.toUpperCase(); });
+      var count = l[1];
+      var w     = Math.round(count / maxCount * 100);
+      return '<div class="stat-label-row">' +
+        '<span class="stat-label-name">' + name + '</span>' +
+        '<div class="stat-label-bar-wrap"><div class="stat-label-bar" style="width:' + w + '%"></div></div>' +
+        '<span class="stat-label-count">' + count + '</span>' +
+      '</div>';
+    }).join("");
+  }
+
+  container.innerHTML =
+    '<div class="stat-cards">' + summary + '</div>' +
+    '<div class="stats-detail">' +
+      '<div class="stats-panel">' + breakdown + '</div>' +
+      '<div class="stats-panel">' + labelsHtml + '</div>' +
+    '</div>';
+}
+
 // ── Config ────────────────────────────────────────────────────────
 async function loadConfig() {
   var res = await fetch("/api/config");
@@ -563,6 +672,7 @@ async function loadConfig() {
   document.getElementById("cfg-radarr-url").value           = cfg.radarr_url          || "";
   document.getElementById("cfg-radarr-key").value           = cfg.radarr_api_key      || "";
   document.getElementById("cfg-webhook-url").value          = cfg.webhook_url         || "";
+  document.getElementById("cfg-webhook-review").checked     = !!cfg.webhook_on_review;
   document.getElementById("cfg-webhook-quarantine").checked = !!cfg.webhook_on_quarantine;
   document.getElementById("cfg-webhook-reject").checked     = !!cfg.webhook_on_reject;
   document.getElementById("cfg-vcs-grid").value             = cfg.vcs_grid            || "4x4";
@@ -612,6 +722,7 @@ async function saveConfig() {
     radarr_url:                  document.getElementById("cfg-radarr-url").value.trim(),
     radarr_api_key:              document.getElementById("cfg-radarr-key").value.trim(),
     webhook_url:                 document.getElementById("cfg-webhook-url").value.trim(),
+    webhook_on_review:           document.getElementById("cfg-webhook-review").checked,
     webhook_on_quarantine:       document.getElementById("cfg-webhook-quarantine").checked,
     webhook_on_reject:           document.getElementById("cfg-webhook-reject").checked,
     vcs_grid:                    document.getElementById("cfg-vcs-grid").value.trim(),
@@ -668,9 +779,14 @@ async function cleanDatabase() {
   var res  = await fetch("/api/db/clean", {method:"POST"});
   var data = await res.json();
   result.className   = res.ok ? "test-result success" : "test-result error";
-  result.textContent = res.ok
-    ? (data.removed > 0 ? "✓ Removed " + data.removed + " stale record" + (data.removed > 1 ? "s" : "") : "✓ Database is clean")
-    : "✗ Clean failed";
+  if (res.ok) {
+    var parts = [];
+    if (data.removed > 0) parts.push(data.removed + " stale record" + (data.removed > 1 ? "s" : ""));
+    if (data.sheets  > 0) parts.push(data.sheets  + " contact sheet" + (data.sheets  > 1 ? "s" : ""));
+    result.textContent = parts.length > 0 ? "✓ Removed " + parts.join(" and ") : "✓ Database is clean";
+  } else {
+    result.textContent = "✗ Clean failed";
+  }
 }
 
 // ── Logs ──────────────────────────────────────────────────────────
@@ -739,14 +855,14 @@ function openLightbox(src, tab, idx) {
   if (sheet && sheet.nsfw_confidence) {
     var pct   = Math.round(sheet.nsfw_confidence * 100);
     var color = pct >= 80 ? "var(--danger)" : pct >= 50 ? "var(--warn)" : "var(--accent)";
-    confHtml  = '<div class="lb-conf"><div class="lb-conf-score" style="color:' + color + '">' + pct + '%</div><div class="lb-conf-label">confidence</div></div>';
+    confHtml  = '<div class="lb-risk"><div class="lb-risk-score" style="color:' + color + '">' + pct + '%</div><div class="lb-risk-label">confidence</div></div>';
   }
 
   var labelsHtml = "";
   if (sheet && sheet.flag_reason) {
     var rows = dedupeLabels(sheet.flag_reason).map(function(l) {
       return '<div class="lb-label"><span class="lb-label-name">' + formatLabel(l.label) + '</span>' +
-             (l.conf > 0 ? '<span class="lb-label-conf">' + l.conf + '%</span>' : '') + '</div>';
+             (l.conf > 0 ? '<span class="lb-label-risk">' + l.conf + '%</span>' : '') + '</div>';
     }).join("");
     labelsHtml = '<div class="lb-labels-title">Detected</div><div class="lb-labels">' + rows + '</div>';
   } else if (sheet) {
@@ -775,14 +891,11 @@ function openLightbox(src, tab, idx) {
   lb.className = "lightbox";
   lb.innerHTML =
     '<div class="lb-outer" onclick="event.stopPropagation()">' +
-      (hasPrev ? '<button class="lb-arrow lb-arrow-prev" onclick="lightboxNav(-1)">&#8249;</button>' : '<div class="lb-arrow-spacer"></div>') +
       '<div class="lb-img-wrap">' +
         '<img class="lb-img" src="' + src + '" alt="">' +
         counter +
       '</div>' +
-      (hasNext ? '<button class="lb-arrow lb-arrow-next" onclick="lightboxNav(1)">&#8250;</button>'  : '<div class="lb-arrow-spacer"></div>') +
       '<div class="lb-panel">' +
-        '<button class="lb-close" onclick="closeLightbox()">✕</button>' +
         titleHtml +
         confHtml +
         labelsHtml +

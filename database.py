@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS files (
     nsfw_confidence   REAL,
     quarantine_path   TEXT,
     state_updated_at  TEXT,
+    state_source      TEXT,
     updated_at        TEXT NOT NULL
 );
 """
@@ -101,14 +102,15 @@ class Database:
     def upsert_file(self, path: str, name: str, size: int, mtime: float,
                     status: str = "ok", review_state: str = "pending",
                     flagged: bool = False, flag_reason: str = None,
-                    nsfw_confidence: float = None) -> None:
+                    nsfw_confidence: float = None,
+                    state_source: str = "auto") -> None:
         now = datetime.now(timezone.utc).isoformat()
         self._con.execute(
             """
             INSERT INTO files
               (path, name, size, mtime, status, review_state, flagged,
-               flag_reason, nsfw_confidence, updated_at, state_updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               flag_reason, nsfw_confidence, state_source, updated_at, state_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 name             = excluded.name,
                 size             = excluded.size,
@@ -118,21 +120,23 @@ class Database:
                 flagged          = excluded.flagged,
                 flag_reason      = excluded.flag_reason,
                 nsfw_confidence  = excluded.nsfw_confidence,
+                state_source     = excluded.state_source,
                 updated_at       = excluded.updated_at,
                 state_updated_at = excluded.state_updated_at
             """,
             (path, name, size, mtime, status, review_state,
-             int(flagged), flag_reason, nsfw_confidence, now, now),
+             int(flagged), flag_reason, nsfw_confidence, state_source, now, now),
         )
         self._con.commit()
 
     def set_review_state(self, path: str, state: str,
-                         quarantine_path: str = None) -> None:
+                         quarantine_path: str = None,
+                         source: str = "user") -> None:
         now = datetime.now(timezone.utc).isoformat()
         self._con.execute(
             """UPDATE files SET review_state = ?, quarantine_path = ?,
-               state_updated_at = ? WHERE path = ?""",
-            (state, quarantine_path, now, path)
+               state_updated_at = ?, state_source = ? WHERE path = ?""",
+            (state, quarantine_path, now, source, path)
         )
         self._con.commit()
 
@@ -169,6 +173,57 @@ class Database:
             stats[row["review_state"]] = row["count"]
         return stats
 
+    def get_stats_full(self) -> dict:
+        """Return comprehensive lifetime stats."""
+        stats = {}
+
+        # State counts
+        cur = self._con.execute(
+            "SELECT review_state, COUNT(*) as count FROM files GROUP BY review_state"
+        )
+        state_counts = {r["review_state"]: r["count"] for r in cur.fetchall()}
+        stats["by_state"] = state_counts
+        stats["total"]    = sum(state_counts.values())
+
+        # Auto vs manual
+        cur = self._con.execute(
+            "SELECT review_state, state_source, COUNT(*) as count FROM files "
+            "GROUP BY review_state, state_source"
+        )
+        breakdown = {}
+        for r in cur.fetchall():
+            key = r["review_state"] + "_" + (r["state_source"] or "auto")
+            breakdown[key] = r["count"]
+        stats["breakdown"] = breakdown
+
+        # Flagged
+        cur = self._con.execute("SELECT COUNT(*) as count FROM files WHERE flagged = 1")
+        stats["total_flagged"] = cur.fetchone()["count"]
+
+        # Average risk score on flagged items
+        cur = self._con.execute(
+            "SELECT AVG(nsfw_confidence) as avg FROM files WHERE flagged = 1 AND nsfw_confidence IS NOT NULL"
+        )
+        row = cur.fetchone()
+        stats["avg_risk_flagged"] = round(float(row["avg"]), 3) if row["avg"] else 0.0
+
+        # Top labels
+        cur = self._con.execute(
+            "SELECT flag_reason FROM files WHERE flag_reason IS NOT NULL AND flag_reason != ''"
+        )
+        label_counts = {}
+        for r in cur.fetchall():
+            for label in r["flag_reason"].split(", "):
+                # Strip confidence percentage if present
+                clean = label.split(" (")[0].strip()
+                if clean:
+                    label_counts[clean] = label_counts.get(clean, 0) + 1
+        stats["top_labels"] = sorted(label_counts.items(), key=lambda x: -x[1])[:10]
+
+        # Total size of approved sheets would need file system access - skip for now
+
+        return stats
+
     def get_stale_quarantined(self, days: int) -> list:
         """Return quarantined files older than *days* days."""
         cur = self._con.execute(
@@ -178,16 +233,39 @@ class Database:
         )
         return cur.fetchall()
 
-    def clean_missing_files(self, watch_folders: list) -> int:
-        rows = self.list_files()
-        removed = 0
+    def clean_missing_files(self, watch_folders: list, output_dir: str = None) -> dict:
+        """
+        Remove DB records for files that no longer exist on disk.
+        For approved items, also delete the VCS sheet.
+        Quarantined files are skipped (source was intentionally moved).
+        Returns dict with counts of records and sheets removed.
+        """
+        rows    = self.list_files()
+        records = 0
+        sheets  = 0
+
         for row in rows:
-            path = Path(row["path"])
+            path     = Path(row["path"])
             in_watch = any(row["path"].startswith(f) for f in watch_folders)
-            if not path.exists() and row["review_state"] not in ("quarantined",) and not in_watch:
+            state    = row["review_state"]
+
+            # Skip quarantined — source was intentionally moved, not missing
+            if state == "quarantined":
+                continue
+
+            if not path.exists() and not in_watch:
+                # Delete VCS sheet for approved items
+                if state == "approved" and output_dir:
+                    stem  = path.stem
+                    sheet = Path(output_dir) / (stem + ".jpg")
+                    if sheet.exists():
+                        sheet.unlink()
+                        sheets += 1
+
                 self.delete_file(row["path"])
-                removed += 1
-        return removed
+                records += 1
+
+        return {"records": records, "sheets": sheets}
 
     # ------------------------------------------------------------------
     # Errors
