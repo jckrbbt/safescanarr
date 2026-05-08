@@ -90,7 +90,7 @@ def api_sheets():
     return jsonify(sheets)
 
 
-@app.route("/api/sheets/image/<filename>")
+@app.route("/api/sheets/image/<path:filename>")
 def api_sheet_image(filename):
     return send_from_directory(Config().OUTPUT_DIR, filename)
 
