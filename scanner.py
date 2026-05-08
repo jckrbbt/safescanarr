@@ -419,7 +419,7 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
         nsfw_confidence=max_conf if max_conf > 0 else None,
     )
     if quarantine_path:
-        db.set_review_state(abs_path, "quarantined", quarantine_path=quarantine_path)
+        db.set_review_state(abs_path, "quarantined", quarantine_path=quarantine_path, source="auto")
 
     # Fire review webhook if item landed in pending
     if state == "pending":
@@ -489,7 +489,7 @@ def run_scan(db: Database) -> None:
                 q_path.unlink()
             if sheet.exists():
                 sheet.unlink()
-            db.set_review_state(row["path"], "rejected")
+            db.set_review_state(row["path"], "rejected", source="auto")
             _send_webhook(cfg, "rejected", row["path"], {})
 
     db.clear_scan_pid()

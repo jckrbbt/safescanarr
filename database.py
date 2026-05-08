@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS state (
 );
 """
 
+CREATE_LIFETIME = """
+CREATE TABLE IF NOT EXISTS lifetime_stats (
+    key   TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 # Migrations: columns added in v0.6
 MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN review_state TEXT NOT NULL DEFAULT 'pending'",
@@ -70,6 +77,7 @@ class Database:
         self._con.execute(CREATE_FILES)
         self._con.execute(CREATE_ERRORS)
         self._con.execute(CREATE_STATE)
+        self._con.execute(CREATE_LIFETIME)
         self._run_migrations()
         # Migrate existing 'ok' records to 'approved'
         self._con.execute(
@@ -78,6 +86,7 @@ class Database:
             "AND updated_at < datetime('now', '-1 minute')"
         )
         self._con.commit()
+        self._seed_lifetime_if_needed()
 
     def _run_migrations(self) -> None:
         cols = [r[1] for r in self._con.execute("PRAGMA table_info(files)").fetchall()]
@@ -106,6 +115,7 @@ class Database:
                     nsfw_confidence: float = None,
                     state_source: str = "auto") -> None:
         now = datetime.now(timezone.utc).isoformat()
+        is_new = self.get_file(path) is None
         self._con.execute(
             """
             INSERT INTO files
@@ -129,10 +139,18 @@ class Database:
              int(flagged), flag_reason, nsfw_confidence, state_source, now, now),
         )
         self._con.commit()
+        if is_new:
+            self._bump_lifetime("total_scanned")
+            if flagged:
+                self._bump_lifetime("total_flagged")
+            if review_state in ("approved", "quarantined", "rejected"):
+                self._bump_lifetime(f"{review_state}_{state_source or 'auto'}")
 
     def set_review_state(self, path: str, state: str,
                          quarantine_path: str = None,
                          source: str = "user") -> None:
+        prev_row   = self.get_file(path)
+        prev_state = prev_row["review_state"] if prev_row else None
         now = datetime.now(timezone.utc).isoformat()
         self._con.execute(
             """UPDATE files SET review_state = ?, quarantine_path = ?,
@@ -140,6 +158,8 @@ class Database:
             (state, quarantine_path, now, source, path)
         )
         self._con.commit()
+        if state != prev_state and state in ("approved", "quarantined", "rejected"):
+            self._bump_lifetime(f"{state}_{source or 'user'}")
 
     def delete_file(self, path: str) -> None:
         self._con.execute("DELETE FROM files WHERE path = ?", (path,))
@@ -175,34 +195,43 @@ class Database:
         return stats
 
     def get_stats_full(self) -> dict:
-        """Return comprehensive lifetime stats."""
+        """Return comprehensive lifetime stats.
+
+        Approved/quarantined/rejected counts and total scanned/flagged come from
+        cumulative lifetime counters that survive record cleanup. Pending stays
+        as a current-snapshot count since it's a transitory state.
+        """
         stats = {}
+        lifetime = self.get_lifetime_stats()
 
-        # State counts
+        # Pending = current snapshot (transitory state, not lifetime-meaningful)
         cur = self._con.execute(
-            "SELECT review_state, COUNT(*) as count FROM files GROUP BY review_state"
+            "SELECT COUNT(*) as count FROM files WHERE review_state = 'pending'"
         )
-        state_counts = {r["review_state"]: r["count"] for r in cur.fetchall()}
-        stats["by_state"] = state_counts
-        stats["total"]    = sum(state_counts.values())
+        pending_now = cur.fetchone()["count"]
 
-        # Auto vs manual (safe if state_source column not yet migrated)
-        try:
-            cur = self._con.execute(
-                "SELECT review_state, state_source, COUNT(*) as count FROM files "
-                "GROUP BY review_state, state_source"
-            )
-            breakdown = {}
-            for r in cur.fetchall():
-                key = r["review_state"] + "_" + (r["state_source"] or "auto")
-                breakdown[key] = r["count"]
-        except Exception:
-            breakdown = {}
-        stats["breakdown"] = breakdown
+        approved_total    = lifetime.get("approved_auto", 0)    + lifetime.get("approved_user", 0)
+        quarantined_total = lifetime.get("quarantined_auto", 0) + lifetime.get("quarantined_user", 0)
+        rejected_total    = lifetime.get("rejected_auto", 0)    + lifetime.get("rejected_user", 0)
 
-        # Flagged
-        cur = self._con.execute("SELECT COUNT(*) as count FROM files WHERE flagged = 1")
-        stats["total_flagged"] = cur.fetchone()["count"]
+        stats["by_state"] = {
+            "pending":     pending_now,
+            "approved":    approved_total,
+            "quarantined": quarantined_total,
+            "rejected":    rejected_total,
+        }
+        stats["total"] = lifetime.get("total_scanned", pending_now + approved_total + quarantined_total + rejected_total)
+
+        stats["breakdown"] = {
+            "approved_auto":    lifetime.get("approved_auto", 0),
+            "approved_user":    lifetime.get("approved_user", 0),
+            "quarantined_auto": lifetime.get("quarantined_auto", 0),
+            "quarantined_user": lifetime.get("quarantined_user", 0),
+            "rejected_auto":    lifetime.get("rejected_auto", 0),
+            "rejected_user":    lifetime.get("rejected_user", 0),
+        }
+
+        stats["total_flagged"] = lifetime.get("total_flagged", 0)
 
         # Average risk score on flagged items
         cur = self._con.execute(
@@ -239,9 +268,12 @@ class Database:
 
     def clean_missing_files(self, watch_folders: list, output_dir: str = None) -> dict:
         """
-        Remove DB records for files that no longer exist on disk.
-        For approved items, also delete the VCS sheet.
-        Quarantined files are skipped (source was intentionally moved).
+        Remove DB records that are stale or orphaned. A record is cleaned if:
+          - the source file no longer exists on disk, OR
+          - the path is no longer inside any watch folder, OR
+          - the VCS sheet is missing (orphan record showing "No Sheet" in the UI).
+        For non-rejected items, the VCS sheet is deleted alongside the record.
+        Quarantined files are skipped (source was intentionally moved, not missing).
         Returns dict with counts of records and sheets removed.
         """
         rows    = self.list_files()
@@ -257,19 +289,61 @@ class Database:
             if state == "quarantined":
                 continue
 
-            if not path.exists() or not in_watch:
+            sheet_file    = Path(output_dir) / (path.stem + ".jpg") if output_dir else None
+            sheet_missing = sheet_file is not None and not sheet_file.exists()
+
+            if not path.exists() or not in_watch or sheet_missing:
                 # Delete VCS sheet alongside the record (rejected sheets are kept as audit trail)
-                if state != "rejected" and output_dir:
-                    stem  = path.stem
-                    sheet = Path(output_dir) / (stem + ".jpg")
-                    if sheet.exists():
-                        sheet.unlink()
-                        sheets += 1
+                if state != "rejected" and sheet_file is not None and sheet_file.exists():
+                    sheet_file.unlink()
+                    sheets += 1
 
                 self.delete_file(row["path"])
                 records += 1
 
         return {"records": records, "sheets": sheets}
+
+    # ------------------------------------------------------------------
+    # Lifetime stats counters
+    # ------------------------------------------------------------------
+
+    def _bump_lifetime(self, key: str, n: int = 1) -> None:
+        self._con.execute(
+            "INSERT INTO lifetime_stats (key, count) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET count = count + excluded.count",
+            (key, n),
+        )
+        self._con.commit()
+
+    def _set_lifetime(self, key: str, count: int) -> None:
+        self._con.execute(
+            "INSERT INTO lifetime_stats (key, count) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET count = excluded.count",
+            (key, count),
+        )
+        self._con.commit()
+
+    def get_lifetime_stats(self) -> dict:
+        cur = self._con.execute("SELECT key, count FROM lifetime_stats")
+        return {r["key"]: r["count"] for r in cur.fetchall()}
+
+    def _seed_lifetime_if_needed(self) -> None:
+        # One-time backfill so existing installations don't start at zero.
+        if self.get_poller_state("lifetime_seeded") == "1":
+            return
+        cur = self._con.execute("SELECT COUNT(*) as c FROM files")
+        self._set_lifetime("total_scanned", cur.fetchone()["c"])
+        cur = self._con.execute("SELECT COUNT(*) as c FROM files WHERE flagged = 1")
+        self._set_lifetime("total_flagged", cur.fetchone()["c"])
+        cur = self._con.execute(
+            "SELECT review_state, state_source, COUNT(*) as c FROM files "
+            "WHERE review_state IN ('approved', 'quarantined', 'rejected') "
+            "GROUP BY review_state, state_source"
+        )
+        for r in cur.fetchall():
+            source = r["state_source"] or "auto"
+            self._set_lifetime(f"{r['review_state']}_{source}", r["c"])
+        self.set_poller_state("lifetime_seeded", "1")
 
     # ------------------------------------------------------------------
     # Errors
