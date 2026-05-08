@@ -57,6 +57,7 @@ MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN nsfw_confidence REAL",
     "ALTER TABLE files ADD COLUMN quarantine_path TEXT",
     "ALTER TABLE files ADD COLUMN state_updated_at TEXT",
+    "ALTER TABLE files ADD COLUMN state_source TEXT",
 ]
 
 
@@ -185,15 +186,18 @@ class Database:
         stats["by_state"] = state_counts
         stats["total"]    = sum(state_counts.values())
 
-        # Auto vs manual
-        cur = self._con.execute(
-            "SELECT review_state, state_source, COUNT(*) as count FROM files "
-            "GROUP BY review_state, state_source"
-        )
-        breakdown = {}
-        for r in cur.fetchall():
-            key = r["review_state"] + "_" + (r["state_source"] or "auto")
-            breakdown[key] = r["count"]
+        # Auto vs manual (safe if state_source column not yet migrated)
+        try:
+            cur = self._con.execute(
+                "SELECT review_state, state_source, COUNT(*) as count FROM files "
+                "GROUP BY review_state, state_source"
+            )
+            breakdown = {}
+            for r in cur.fetchall():
+                key = r["review_state"] + "_" + (r["state_source"] or "auto")
+                breakdown[key] = r["count"]
+        except Exception:
+            breakdown = {}
         stats["breakdown"] = breakdown
 
         # Flagged

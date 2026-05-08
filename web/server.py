@@ -67,7 +67,8 @@ def api_sheets():
         stem = Path(row["path"]).stem
         if search and search not in stem.lower() and search not in row["path"].lower():
             continue
-        if source and row.get("state_source") != source:
+        row_source = row["state_source"] if "state_source" in row.keys() else None
+        if source and row_source != source:
             continue
         sheet_file = output_dir / (stem + ".jpg")
         sheets.append({
@@ -83,7 +84,7 @@ def api_sheets():
             "state_updated_at": row["state_updated_at"],
             "updated_at":      row["updated_at"],
             "size":            row["size"],
-            "state_source":    row["state_source"],
+            "state_source":    row["state_source"] if "state_source" in row.keys() else None,
         })
 
     return jsonify(sheets)
