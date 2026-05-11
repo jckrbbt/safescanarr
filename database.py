@@ -240,21 +240,6 @@ class Database:
         row = cur.fetchone()
         stats["avg_risk_flagged"] = round(float(row["avg"]), 3) if row["avg"] else 0.0
 
-        # Top labels
-        cur = self._con.execute(
-            "SELECT flag_reason FROM files WHERE flag_reason IS NOT NULL AND flag_reason != ''"
-        )
-        label_counts = {}
-        for r in cur.fetchall():
-            for label in r["flag_reason"].split(", "):
-                # Strip confidence percentage if present
-                clean = label.split(" (")[0].strip()
-                if clean:
-                    label_counts[clean] = label_counts.get(clean, 0) + 1
-        stats["top_labels"] = sorted(label_counts.items(), key=lambda x: -x[1])[:10]
-
-        # Total size of approved sheets would need file system access - skip for now
-
         return stats
 
     def get_stale_quarantined(self, days: int) -> list:

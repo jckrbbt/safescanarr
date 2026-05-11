@@ -8,7 +8,7 @@ let statsTimer    = null;
 let scanPollTimer = null;
 let scanRunning   = false;
 let pageSize      = 20;
-let tabSort       = {pending: "risk", approved: "title", quarantined: "risk", rejected: "date"};
+let tabSort       = {pending: "risk", approved: "date", quarantined: "risk", rejected: "date"};
 let approvedSourceFilter = "";
 let tabPage       = {};
 
@@ -21,7 +21,23 @@ TABS.forEach(function(t) {
 document.addEventListener("DOMContentLoaded", function() {
   loadVersion();
   loadStats();
-  navigateTo("pending");
+
+  // Sync sort dropdowns to defaults defined in tabSort
+  TABS.forEach(function(t) {
+    var sel = document.querySelector("#page-" + t + " .sort-control select");
+    if (sel) sel.value = tabSort[t];
+  });
+
+  // Deep-link: open the requested tab from ?tab=... (e.g. webhook notifications)
+  var initialTab = "pending";
+  try {
+    var params = new URLSearchParams(window.location.search);
+    var requested = params.get("tab");
+    if (requested && (TABS.indexOf(requested) >= 0 || ["stats","config","logs"].indexOf(requested) >= 0)) {
+      initialTab = requested;
+    }
+  } catch(e) {}
+  navigateTo(initialTab);
   statsTimer    = setInterval(loadStats, 60000);
   checkScanStatus();
   scanPollTimer = setInterval(checkScanStatus, 5000);
@@ -586,7 +602,6 @@ async function loadStatsPage() {
 
   var by     = stats.by_state   || {};
   var bd     = stats.breakdown  || {};
-  var labels = stats.top_labels || [];
   var total  = stats.total      || 0;
 
   function pct(n) { return total > 0 ? Math.round(n / total * 100) : 0; }
@@ -621,30 +636,9 @@ async function loadStatsPage() {
     '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>' +
     (stats.avg_risk_flagged > 0 ? '<div class="stat-row"><span class="stat-row-label">Avg risk score (flagged)</span><span class="stat-row-value">' + Math.round(stats.avg_risk_flagged * 100) + '%</span></div>' : '');
 
-  // Top labels
-  var labelsHtml = '<div class="stats-section-title">Most Common Detections</div>';
-  if (labels.length === 0) {
-    labelsHtml += '<p class="stat-empty">No detections recorded yet.</p>';
-  } else {
-    var maxCount = labels[0][1] || 1;
-    labelsHtml += labels.map(function(l) {
-      var name  = l[0].replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, function(c) { return c.toUpperCase(); });
-      var count = l[1];
-      var w     = Math.round(count / maxCount * 100);
-      return '<div class="stat-label-row">' +
-        '<span class="stat-label-name">' + name + '</span>' +
-        '<div class="stat-label-bar-wrap"><div class="stat-label-bar" style="width:' + w + '%"></div></div>' +
-        '<span class="stat-label-count">' + count + '</span>' +
-      '</div>';
-    }).join("");
-  }
-
   container.innerHTML =
     '<div class="stat-cards">' + summary + '</div>' +
-    '<div class="stats-detail">' +
-      '<div class="stats-panel">' + breakdown + '</div>' +
-      '<div class="stats-panel">' + labelsHtml + '</div>' +
-    '</div>';
+    '<div class="stats-panel">' + breakdown + '</div>';
 }
 
 // ── Config ────────────────────────────────────────────────────────
@@ -661,7 +655,8 @@ async function loadConfig() {
   document.getElementById("cfg-zone-quarantine").value      = cfg.zone_quarantine     != null ? cfg.zone_quarantine     : 0.5;
   document.getElementById("cfg-zone-reject").value          = cfg.zone_auto_reject    != null ? cfg.zone_auto_reject    : 0.9;
   document.getElementById("cfg-nudenet-frames").value       = cfg.nudenet_frames      || 10;
-  document.getElementById("cfg-watch-folders").value        = (cfg.watch_folders || []).join("\n");
+  window._watchFolders = (cfg.watch_folders || []).slice();
+  renderWatchFolders();
   document.getElementById("cfg-scan-schedule-enabled").checked = !!cfg.scan_schedule_enabled;
   document.getElementById("cfg-scan-schedule").value        = cfg.scan_schedule       || "daily";
   document.getElementById("cfg-quarantine-dir").value       = cfg.quarantine_dir      || "";
@@ -676,6 +671,7 @@ async function loadConfig() {
   document.getElementById("cfg-webhook-review").checked     = !!cfg.webhook_on_review;
   document.getElementById("cfg-webhook-quarantine").checked = !!cfg.webhook_on_quarantine;
   document.getElementById("cfg-webhook-reject").checked     = !!cfg.webhook_on_reject;
+  document.getElementById("cfg-web-ui-url").value           = cfg.web_ui_url          || "";
   document.getElementById("cfg-vcs-grid").value             = cfg.vcs_grid            || "4x4";
   document.getElementById("cfg-vcsi-timeout").value         = cfg.vcsi_timeout_seconds || 300;
   checkArrKeys();
@@ -703,8 +699,7 @@ function applyProfile(profile) {
 }
 
 async function saveConfig() {
-  var folders = document.getElementById("cfg-watch-folders").value
-    .split("\n").map(function(s) { return s.trim(); }).filter(Boolean);
+  var folders = (window._watchFolders || []).slice();
   var payload = {
     detection_profile:           (document.querySelector("input[name='detection-profile']:checked") || {value:"balanced"}).value,
     zone_auto_approve:           parseFloat(document.getElementById("cfg-zone-approve").value),
@@ -726,6 +721,7 @@ async function saveConfig() {
     webhook_on_review:           document.getElementById("cfg-webhook-review").checked,
     webhook_on_quarantine:       document.getElementById("cfg-webhook-quarantine").checked,
     webhook_on_reject:           document.getElementById("cfg-webhook-reject").checked,
+    web_ui_url:                  document.getElementById("cfg-web-ui-url").value.trim(),
     vcs_grid:                    document.getElementById("cfg-vcs-grid").value.trim(),
     vcsi_timeout_seconds:        parseInt(document.getElementById("cfg-vcsi-timeout").value),
   };
@@ -738,6 +734,101 @@ async function saveConfig() {
   }
   msg.style.display = "block";
   setTimeout(function() { msg.style.display = "none"; }, 4000);
+}
+
+// ── Watch folder list + browser ──────────────────────────────────
+window._watchFolders   = [];
+window._fsCurrentPath  = null;
+
+function renderWatchFolders() {
+  var container = document.getElementById("cfg-watch-folders-list");
+  if (!container) return;
+  var list = window._watchFolders || [];
+  if (list.length === 0) {
+    container.innerHTML = '<div class="folder-empty-hint">No folders configured yet.</div>';
+    return;
+  }
+  container.innerHTML = list.map(function(p, idx) {
+    return '<div class="folder-row">' +
+      '<span class="folder-row-path" title="' + escapeHtml(p) + '">' + escapeHtml(p) + '</span>' +
+      '<button type="button" class="folder-row-remove" title="Remove" onclick="removeWatchFolder(' + idx + ')">✕</button>' +
+    '</div>';
+  }).join("");
+}
+
+function removeWatchFolder(idx) {
+  window._watchFolders.splice(idx, 1);
+  renderWatchFolders();
+}
+
+function openFolderBrowser() {
+  var existing = document.getElementById("folder-browser");
+  if (existing) existing.remove();
+  var overlay = document.createElement("div");
+  overlay.id = "folder-browser";
+  overlay.className = "modal-overlay";
+  overlay.innerHTML =
+    '<div class="modal folder-browser-modal">' +
+      '<h2>Add Watch Folder</h2>' +
+      '<div id="folder-browser-path" class="folder-browser-path"></div>' +
+      '<div id="folder-browser-list" class="folder-browser-list">' +
+        '<div class="folder-browser-empty">Loading…</div>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-primary" id="folder-browser-use">Use This Folder</button>' +
+        '<button class="btn btn-secondary" onclick="closeFolderBrowser()">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  document.getElementById("folder-browser-use").onclick = function() {
+    var p = window._fsCurrentPath;
+    if (!p) return;
+    if ((window._watchFolders || []).indexOf(p) < 0) {
+      window._watchFolders.push(p);
+      renderWatchFolders();
+    }
+    closeFolderBrowser();
+  };
+  loadFsPath("");
+}
+
+function closeFolderBrowser() {
+  var el = document.getElementById("folder-browser");
+  if (el) el.remove();
+  window._fsCurrentPath = null;
+}
+
+async function loadFsPath(path) {
+  var url = "/api/fs/list" + (path ? "?path=" + encodeURIComponent(path) : "");
+  var res, data;
+  try {
+    res  = await fetch(url);
+    data = await res.json();
+  } catch(e) {
+    return;
+  }
+  var listEl = document.getElementById("folder-browser-list");
+  if (!listEl) return;
+  if (!res.ok) {
+    listEl.innerHTML = '<div class="folder-browser-empty">' + escapeHtml((data && data.message) || "Error") + '</div>';
+    return;
+  }
+  window._fsCurrentPath = data.path;
+  var pathEl = document.getElementById("folder-browser-path");
+  if (pathEl) pathEl.textContent = data.path;
+
+  var html = "";
+  if (data.parent && data.parent !== data.path) {
+    html += '<div class="folder-browser-item up" onclick=\'loadFsPath(' + JSON.stringify(data.parent) + ')\'>⬆ ..</div>';
+  }
+  if (!data.entries || data.entries.length === 0) {
+    html += '<div class="folder-browser-empty">No subdirectories. You can still select this folder.</div>';
+  } else {
+    html += data.entries.map(function(e) {
+      return '<div class="folder-browser-item" onclick=\'loadFsPath(' + JSON.stringify(e.path) + ')\'>📁 ' + escapeHtml(e.name) + '</div>';
+    }).join("");
+  }
+  listEl.innerHTML = html;
 }
 
 function checkArrKeys() {
@@ -787,6 +878,55 @@ async function cleanDatabase() {
     result.textContent = parts.length > 0 ? "✓ Removed " + parts.join(" and ") : "✓ Database is clean";
   } else {
     result.textContent = "✗ Clean failed";
+  }
+}
+
+// ── Backup / restore ─────────────────────────────────────────────
+async function restoreDatabase(file) {
+  if (!file) return;
+  if (!confirm("This will REPLACE the entire database. Continue?")) return;
+  var result = document.getElementById("backup-result");
+  result.className = "test-result";
+  result.textContent = "Restoring database…";
+  var fd = new FormData();
+  fd.append("file", file);
+  try {
+    var res = await fetch("/api/backup/restore/db", {method:"POST", body: fd});
+    var d   = await res.json();
+    if (res.ok) {
+      result.className   = "test-result success";
+      result.textContent = "✓ Database restored — reload the page to see the new data.";
+    } else {
+      result.className   = "test-result error";
+      result.textContent = "✗ " + (d.message || "Restore failed");
+    }
+  } catch(e) {
+    result.className   = "test-result error";
+    result.textContent = "✗ " + e.message;
+  }
+}
+
+async function restoreVcsArchive(file) {
+  if (!file) return;
+  if (!confirm("This will REPLACE all VCS thumbnails. Continue?")) return;
+  var result = document.getElementById("backup-result");
+  result.className = "test-result";
+  result.textContent = "Restoring VCS thumbnails (this may take a while)…";
+  var fd = new FormData();
+  fd.append("file", file);
+  try {
+    var res = await fetch("/api/backup/restore/vcs", {method:"POST", body: fd});
+    var d   = await res.json();
+    if (res.ok) {
+      result.className   = "test-result success";
+      result.textContent = "✓ Restored " + (d.extracted || 0) + " thumbnail" + ((d.extracted || 0) === 1 ? "" : "s") + ".";
+    } else {
+      result.className   = "test-result error";
+      result.textContent = "✗ " + (d.message || "Restore failed");
+    }
+  } catch(e) {
+    result.className   = "test-result error";
+    result.textContent = "✗ " + e.message;
   }
 }
 
@@ -1003,6 +1143,55 @@ function toast(msg, isError) {
   el.style.display = "block";
   setTimeout(function() { el.style.display = "none"; }, 3000);
 }
+
+// ── Mobile swipe to open/close sidebar ────────────────────────────
+(function() {
+  var EDGE_TRIGGER_PX = 24;   // touch must start within this many px of the left edge to open
+  var SWIPE_THRESHOLD = 60;   // horizontal delta required to count as a swipe
+  var DIRECTION_RATIO = 1.3;  // |dx| must exceed |dy| by this ratio to be horizontal
+
+  var startX = null, startY = null, fromEdge = false, fromInsideSidebar = false;
+
+  function onStart(e) {
+    if (window.innerWidth > 768) return;
+    var t = e.touches && e.touches[0];
+    if (!t) return;
+    startX = t.clientX;
+    startY = t.clientY;
+    fromEdge = startX <= EDGE_TRIGGER_PX;
+    var sidebar = document.querySelector(".sidebar");
+    fromInsideSidebar = sidebar && sidebar.contains(e.target) && !sidebar.classList.contains("collapsed");
+  }
+
+  function onEnd(e) {
+    if (startX === null) return;
+    var t = e.changedTouches && e.changedTouches[0];
+    if (!t) { startX = null; return; }
+    var dx = t.clientX - startX;
+    var dy = t.clientY - startY;
+    startX = null; startY = null;
+
+    if (Math.abs(dx) < SWIPE_THRESHOLD) return;
+    if (Math.abs(dx) < Math.abs(dy) * DIRECTION_RATIO) return; // mostly vertical, ignore
+
+    var sidebar = document.querySelector(".sidebar");
+    if (!sidebar) return;
+    var isOpen  = !sidebar.classList.contains("collapsed");
+
+    // Swipe right from the left edge → open
+    if (dx > 0 && fromEdge && !isOpen) {
+      toggleSidebar();
+      return;
+    }
+    // Swipe left anywhere while the sidebar is open → close
+    if (dx < 0 && isOpen && (fromInsideSidebar || fromEdge || true)) {
+      toggleSidebar();
+    }
+  }
+
+  document.addEventListener("touchstart", onStart, {passive: true});
+  document.addEventListener("touchend",   onEnd,   {passive: true});
+})();
 
 // ── Helpers ───────────────────────────────────────────────────────
 function escapeHtml(s) {

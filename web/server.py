@@ -3,17 +3,24 @@
 safescanarr/web/server.py v0.6
 """
 
+import datetime
 import json
 import logging
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import (
+    Flask, after_this_request, jsonify, request,
+    send_file, send_from_directory, render_template,
+)
 
 sys.path.insert(0, "/opt/safescanarr")
 import config as config_module
@@ -267,13 +274,19 @@ def api_test_webhook():
     cfg = Config()
     if not cfg.WEBHOOK_URL:
         return jsonify({"status": "error", "message": "No webhook URL set"}), 400
-    payload = json.dumps({
-        "event":      "test",
-        "path":       "/mnt/media/Movies/Example (2024)/Example (2024).mp4",
-        "confidence": 0.75,
-        "labels":     ["FEMALE_BREAST_EXPOSED"],
-        "timestamp":  __import__("datetime").datetime.now().isoformat(),
-    }).encode()
+    title = "Example (2024)"
+    body = {
+        "event":     "test",
+        "path":      f"/mnt/media/Movies/{title}/{title}.mp4",
+        "title":     title,
+        "risk":      0.75,
+        "labels":    ["FEMALE_BREAST_EXPOSED"],
+        "message":   f"Quarantined: {title} (risk: 75%)",
+        "timestamp": __import__("datetime").datetime.now().isoformat(),
+    }
+    if cfg.WEB_UI_URL:
+        body["url"] = f"{cfg.WEB_UI_URL.rstrip('/')}/?tab=quarantined"
+    payload = json.dumps(body).encode()
     try:
         req = urllib.request.Request(
             cfg.WEBHOOK_URL, data=payload,
@@ -291,6 +304,176 @@ def api_db_clean():
     db     = get_db()
     result = db.clean_missing_files(cfg.WATCH_FOLDERS, output_dir=cfg.OUTPUT_DIR)
     return jsonify({"status": "ok", "removed": result["records"], "sheets": result["sheets"]})
+
+
+# ── Backup / restore ──────────────────────────────────────────────
+def _schedule_cleanup(path: str):
+    @after_this_request
+    def _cleanup(response):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return response
+
+
+@app.route("/api/backup/db")
+def api_backup_db():
+    """Download a hot-copy of the SQLite database using sqlite3.backup."""
+    cfg = Config()
+    db_path = cfg.DB_FILE
+    if not os.path.isfile(db_path):
+        return jsonify({"status": "error", "message": "Database file not found"}), 404
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    try:
+        src  = sqlite3.connect(db_path)
+        dest = sqlite3.connect(tmp.name)
+        with dest:
+            src.backup(dest)
+        dest.close(); src.close()
+    except Exception as e:
+        os.unlink(tmp.name)
+        return jsonify({"status": "error", "message": str(e)}), 500
+    _schedule_cleanup(tmp.name)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return send_file(tmp.name, as_attachment=True,
+                     download_name=f"safescanarr-{ts}.db",
+                     mimetype="application/octet-stream")
+
+
+@app.route("/api/backup/vcs")
+def api_backup_vcs():
+    """Download all VCS thumbnails as a zip archive."""
+    cfg = Config()
+    out_dir = Path(cfg.OUTPUT_DIR)
+    if not out_dir.is_dir():
+        return jsonify({"status": "error", "message": "VCS directory not found"}), 404
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    try:
+        # ZIP_DEFLATED gives marginal gain over JPGs but keeps the archive in a
+        # universally readable format; transfer cost matters more than ratio here.
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
+            for jpg in sorted(out_dir.glob("*.jpg")):
+                z.write(jpg, arcname=jpg.name)
+    except Exception as e:
+        os.unlink(tmp.name)
+        return jsonify({"status": "error", "message": str(e)}), 500
+    _schedule_cleanup(tmp.name)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return send_file(tmp.name, as_attachment=True,
+                     download_name=f"safescanarr-vcs-{ts}.zip",
+                     mimetype="application/zip")
+
+
+@app.route("/api/backup/restore/db", methods=["POST"])
+def api_restore_db():
+    """Replace the SQLite database with an uploaded file. Refuses while a scan is running."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"status": "error", "message": "No file uploaded"}), 400
+    cfg = Config()
+    db  = get_db()
+    if db.get_scan_pid():
+        return jsonify({"status": "error", "message": "Stop the running scan before restoring"}), 409
+    # Validate SQLite magic header
+    head = f.read(16)
+    if not head.startswith(b"SQLite format 3"):
+        return jsonify({"status": "error", "message": "Not a SQLite database file"}), 400
+    db_path  = cfg.DB_FILE
+    tmp_path = db_path + ".restore.tmp"
+    try:
+        with open(tmp_path, "wb") as out:
+            out.write(head)
+            while True:
+                chunk = f.read(1 << 20)  # 1 MiB
+                if not chunk:
+                    break
+                out.write(chunk)
+        # Drop any stale WAL/journal sidecars so the new DB isn't confused with them
+        for suffix in ("-wal", "-shm", "-journal"):
+            stale = Path(db_path + suffix)
+            if stale.exists():
+                stale.unlink()
+        os.replace(tmp_path, db_path)
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            try: os.unlink(tmp_path)
+            except OSError: pass
+        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/backup/restore/vcs", methods=["POST"])
+def api_restore_vcs():
+    """Replace VCS thumbnails with the contents of an uploaded zip archive."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"status": "error", "message": "No file uploaded"}), 400
+    cfg = Config()
+    out_dir = Path(cfg.OUTPUT_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        f.save(tmp_path)
+        if not zipfile.is_zipfile(tmp_path):
+            return jsonify({"status": "error", "message": "Not a zip archive"}), 400
+        # Wipe existing thumbnails so the restore is a true replacement
+        for existing in out_dir.glob("*.jpg"):
+            existing.unlink()
+        extracted = 0
+        with zipfile.ZipFile(tmp_path) as z:
+            for info in z.infolist():
+                # Flatten any subdir structure; reject path-traversal attempts
+                name = os.path.basename(info.filename)
+                if not name or not name.lower().endswith(".jpg"):
+                    continue
+                target = out_dir / name
+                with z.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                extracted += 1
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        try: os.unlink(tmp_path)
+        except OSError: pass
+    return jsonify({"status": "ok", "extracted": extracted})
+
+
+# ── Filesystem browser (used by Watch Folders picker) ──────────────
+@app.route("/api/fs/list")
+def api_fs_list():
+    """List subdirectories at the given path. Hidden dirs are skipped."""
+    raw = request.args.get("path", "").strip()
+    if not raw:
+        # Default starting point: prefer /mnt or /media if present, else /
+        for candidate in ("/mnt", "/media", "/"):
+            if os.path.isdir(candidate):
+                raw = candidate
+                break
+    path = os.path.abspath(raw)
+    if not os.path.isdir(path):
+        return jsonify({"status": "error", "message": f"Not a directory: {path}"}), 400
+    try:
+        entries = []
+        for name in sorted(os.listdir(path)):
+            if name.startswith("."):
+                continue
+            full = os.path.join(path, name)
+            try:
+                if os.path.isdir(full):
+                    entries.append({"name": name, "path": full})
+            except OSError:
+                continue
+    except PermissionError:
+        return jsonify({"status": "error", "message": "Permission denied"}), 403
+    except OSError as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    parent = os.path.dirname(path) if path not in ("/", "") else None
+    return jsonify({"path": path, "parent": parent, "entries": entries})
 
 
 @app.route("/api/scan/status")

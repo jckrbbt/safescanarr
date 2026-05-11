@@ -37,6 +37,7 @@ _DEFAULTS = {
     "webhook_on_review":       False,
     "webhook_on_quarantine":   True,
     "webhook_on_reject":       True,
+    "web_ui_url":              "",   # base URL used to build deep-links in webhook payloads
     # VCS
     "vcs_grid":                "4x4",
     "vcsi_timeout_seconds":    300,
@@ -101,6 +102,7 @@ def _load() -> dict:
         "webhook_on_review":     False,
         "webhook_on_quarantine": True,
         "webhook_on_reject":     True,
+        "web_ui_url":            os.environ.get("WEB_UI_URL", ""),
         "vcs_grid":              os.environ.get("VCS_GRID", _DEFAULTS["vcs_grid"]),
         "vcs_quality":           80,
         "vcsi_timeout_seconds":  int(os.environ.get("VCSI_TIMEOUT_SECONDS", 300)),
@@ -159,6 +161,7 @@ class Config:
         self.WEBHOOK_ON_REVIEW       = cfg.get("webhook_on_review", False)
         self.WEBHOOK_ON_QUARANTINE   = cfg.get("webhook_on_quarantine", True)
         self.WEBHOOK_ON_REJECT       = cfg.get("webhook_on_reject", True)
+        self.WEB_UI_URL              = cfg.get("web_ui_url", "")
         # VCS
         self.VCS_GRID                = cfg["vcs_grid"]
         self.VCSI_EXTRA_ARGS: list[str] = []

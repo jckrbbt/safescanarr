@@ -188,14 +188,39 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
     if event == "rejected"    and not cfg.WEBHOOK_ON_REJECT:
         return
 
+    from pathlib import Path as _Path
     labels = [h["label"] for h in (nudenet_result.get("labels") or [])]
-    payload = json.dumps({
-        "event":      event,
-        "path":       path,
-        "confidence": nudenet_result.get("max_conf", 0),
-        "labels":     labels,
-        "timestamp":  datetime.now().isoformat(),
-    }).encode()
+    risk   = nudenet_result.get("max_conf", 0) or 0
+    title  = _Path(path).stem
+    event_label = {
+        "review":      "Needs review",
+        "quarantined": "Quarantined",
+        "rejected":    "Rejected",
+    }.get(event, event.capitalize())
+    message = f"{event_label}: {title} (risk: {round(risk * 100)}%)"
+
+    # Deep-link to the relevant tab in the Safe Scanarr UI, if a base URL is configured.
+    tab_for_event = {
+        "review":      "pending",
+        "quarantined": "quarantined",
+        "rejected":    "rejected",
+    }.get(event)
+    url = ""
+    if cfg.WEB_UI_URL and tab_for_event:
+        url = f"{cfg.WEB_UI_URL.rstrip('/')}/?tab={tab_for_event}"
+
+    body = {
+        "event":     event,
+        "path":      path,
+        "title":     title,
+        "risk":      risk,
+        "labels":    labels,
+        "message":   message,
+        "timestamp": datetime.now().isoformat(),
+    }
+    if url:
+        body["url"] = url
+    payload = json.dumps(body).encode()
 
     try:
         req = urllib.request.Request(

@@ -294,8 +294,9 @@
 
           <section class="config-section">
             <h2>Watch Folders</h2>
-            <p class="hint">One folder per line. Only media in these folders will be scanned.</p>
-            <textarea id="cfg-watch-folders" rows="4" class="input-full"></textarea>
+            <p class="hint">Only media in these folders will be scanned. Click "Add folder" to browse.</p>
+            <div id="cfg-watch-folders-list" class="folder-list"></div>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openFolderBrowser()">+ Add folder</button>
           </section>
 
           <section class="config-section">
@@ -395,6 +396,9 @@
                 <input type="checkbox" id="cfg-webhook-reject"> Notify on reject
               </label>
             </div>
+            <label style="margin-top:14px">Safe Scanarr URL (for deep links in notifications)</label>
+            <p class="hint">Base URL the webhook should link back to (e.g. http://safescanarr.local:8686). Leave blank to omit the link.</p>
+            <input type="text" id="cfg-web-ui-url" class="input-full" placeholder="http://safescanarr.local:8686">
           </section>
 
           <section class="config-section">
@@ -411,6 +415,29 @@
             <p class="hint">Clean Database removes records for files that no longer exist on disk or are outside your watch folders.</p>
             <button class="btn btn-secondary" onclick="cleanDatabase()">🧹 Clean Database</button>
             <div id="clean-db-result" class="test-result" style="margin-top:8px"></div>
+
+            <div class="arr-divider"></div>
+            <h3 class="backup-subsection">Backup &amp; Restore</h3>
+            <p class="hint">The database is small; the VCS thumbnail archive can be large. Restores replace existing data entirely.</p>
+            <div class="backup-grid">
+              <div>
+                <label>Database</label>
+                <div class="input-row backup-row">
+                  <a class="btn btn-secondary btn-sm" href="/api/backup/db" download>⬇ Download</a>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('restore-db-file').click()">⬆ Restore…</button>
+                  <input type="file" id="restore-db-file" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="restoreDatabase(this.files[0]); this.value='';">
+                </div>
+              </div>
+              <div>
+                <label>VCS Thumbnails</label>
+                <div class="input-row backup-row">
+                  <a class="btn btn-secondary btn-sm" href="/api/backup/vcs" download>⬇ Download (.zip)</a>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('restore-vcs-file').click()">⬆ Restore…</button>
+                  <input type="file" id="restore-vcs-file" accept=".zip" style="display:none" onchange="restoreVcsArchive(this.files[0]); this.value='';">
+                </div>
+              </div>
+            </div>
+            <div id="backup-result" class="test-result" style="margin-top:8px"></div>
           </section>
 
         </div>
