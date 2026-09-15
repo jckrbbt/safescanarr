@@ -245,7 +245,7 @@ class Config:
         # Bind to loopback by default; containers/LAN deployments opt in via
         # WEB_HOST=0.0.0.0 (docker-compose sets this).
         self.WEB_HOST                = os.environ.get("WEB_HOST", "127.0.0.1")
-        self.WEB_PORT                = int(os.environ.get("WEB_PORT", 8686))
+        self.WEB_PORT                = int(os.environ.get("WEB_PORT", 8666))
 
     @staticmethod
     def version() -> str:

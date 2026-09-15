@@ -4,7 +4,7 @@ services:
     container_name: safescanarr
     restart: unless-stopped
     ports:
-      - "8686:8686"
+      - "8666:8666"
     volumes:
       # Persistent data (db, logs, contact sheets)
       - ./data:/opt/safescanarr/data
@@ -12,7 +12,7 @@ services:
       # - /path/to/your/media:/mnt/media
     environment:
       - BASE_DIR=/opt/safescanarr/data
-      - WEB_PORT=8686
+      - WEB_PORT=8666
       # Bind inside the container so the published port stays reachable from the
       # LAN. The host default (127.0.0.1) deliberately does not expose the UI.
       - WEB_HOST=0.0.0.0

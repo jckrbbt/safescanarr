@@ -44,7 +44,7 @@ Edit `docker-compose.yml` to mount your media folders, then:
 docker compose up -d --build
 ```
 
-Open **http://yourserver:8686** and configure everything from the Config page.
+Open **http://yourserver:8666** and configure everything from the Config page.
 
 ---
 
@@ -55,7 +55,7 @@ Only two environment variables are required in `docker-compose.yml`:
 | Variable | Default | Description |
 |---|---|---|
 | `BASE_DIR` | `/opt/safescanarr/data` | Where config, database, logs, and contact sheets are stored |
-| `WEB_PORT` | `8686` | Web UI port |
+| `WEB_PORT` | `8666` | Web UI port |
 
 All other settings are managed from the Config page in the UI and saved to `./data/config.json`.
 
@@ -98,13 +98,13 @@ services:
     container_name: safescanarr
     restart: unless-stopped
     ports:
-      - "8686:8686"
+      - "8666:8666"
     volumes:
       - ./data:/opt/safescanarr/data
       - /your/media/path:/mnt/media
     environment:
       - BASE_DIR=/opt/safescanarr/data
-      - WEB_PORT=8686
+      - WEB_PORT=8666
 ```
 
 Media folders must not be mounted read-only for quarantine and delete features to work.
