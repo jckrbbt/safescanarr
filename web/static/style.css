@@ -1356,3 +1356,28 @@ textarea.input-full { resize: vertical; }
 @media (max-width: 600px) {
   .backup-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Login page ───────────────────────────────────────────────── */
+.login-body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 32px 28px;
+  text-align: center;
+}
+.login-logo { width: 48px; height: 48px; margin-bottom: 8px; }
+.login-title { font-size: 20px; margin: 0 0 6px; }
+.login-hint { color: var(--text-dim); font-size: 13px; margin: 0 0 18px; }
+.login-submit { width: 100%; margin-top: 12px; }
+.login-footnote { color: var(--text-dim); font-size: 11px; margin: 18px 0 0; line-height: 1.5; }
+.login-footnote code { background: var(--bg3); padding: 1px 4px; border-radius: 4px; }
+

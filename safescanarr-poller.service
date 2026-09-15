@@ -1,5 +1,7 @@
 # /etc/systemd/system/safescanarr-poller.service
 # Polls Sonarr and Radarr APIs every POLL_INTERVAL_SECONDS for new imports.
+#
+# Runs as the dedicated unprivileged user "safescanarr" (created by install.sh).
 
 [Unit]
 Description=Safe Scanarr – Sonarr/Radarr API poller
@@ -7,7 +9,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=safescanarr
+Group=safescanarr
 WorkingDirectory=/opt/safescanarr
 ExecStart=/opt/safescanarr/venv/bin/python /opt/safescanarr/poller.py
 Restart=on-failure
@@ -17,6 +20,7 @@ StandardError=journal
 
 PrivateTmp=true
 NoNewPrivileges=true
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

@@ -1,4 +1,8 @@
 # /etc/systemd/system/safescanarr.service
+#
+# Runs as the dedicated unprivileged user "safescanarr". install.sh creates it:
+#   useradd --system --create-home --shell /usr/sbin/nologin safescanarr
+# The whole install directory (including data/) must be owned by that user.
 
 [Unit]
 Description=Safe Scanarr – video contact-sheet generator
@@ -6,7 +10,8 @@ After=network.target
 
 [Service]
 Type=oneshot
-User=root
+User=safescanarr
+Group=safescanarr
 WorkingDirectory=/opt/safescanarr
 ExecStart=/opt/safescanarr/venv/bin/python /opt/safescanarr/scanner.py --scan
 StandardOutput=journal
@@ -14,3 +19,4 @@ StandardError=journal
 
 PrivateTmp=true
 NoNewPrivileges=true
+ProtectSystem=full

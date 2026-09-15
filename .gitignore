@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Runtime data (database, logs, contact sheets, config with secrets)
+data/
+*.db
+*.log
+config.json
+
+# Local tooling
+.claude/
+venv/
+
+# OS cruft
+.DS_Store

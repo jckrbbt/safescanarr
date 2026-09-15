@@ -13,3 +13,8 @@ services:
     environment:
       - BASE_DIR=/opt/safescanarr/data
       - WEB_PORT=8686
+      # Bind inside the container so the published port stays reachable from the
+      # LAN. The host default (127.0.0.1) deliberately does not expose the UI.
+      - WEB_HOST=0.0.0.0
+      # Optional: manage the UI auth token via env instead of config.json
+      # - SS_TOKEN=change-me
