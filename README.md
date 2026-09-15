@@ -20,7 +20,7 @@ Detection may produce both false positives and false negatives. No automated det
 
 - Automatic NSFW detection runs locally on your server; no data is sent anywhere
 - Configurable detection profiles (Conservative, Balanced, Aggressive, Custom)
-- Zone-based handling: auto-approve clean content, flag ambiguous content for review, quarantine or remove high-risk content
+- Zone-based handling: auto-approve clean content, flag ambiguous content for review, quarantine or reject high-risk content (rejects are quarantined by default; permanent deletion is an separate opt-in)
 - Four-tab UI: Review, Approved, Quarantine, Rejected
 - Quarantine: suspicious files are moved rather than deleted immediately, giving you a chance to review before permanently removing
 - Lightbox viewer with keyboard navigation and per-item actions
@@ -74,7 +74,7 @@ Low risk ---- Auto-approve ---- Review ---- Quarantine ---- Auto-reject ---- Hig
 | Below auto-approve | Approved automatically, no review needed |
 | Between auto-approve and quarantine | Goes to the Review queue for manual decision |
 | Between quarantine and auto-reject | Video moved to quarantine folder |
-| Above auto-reject | Video deleted immediately |
+| Above auto-reject | Video rejected (quarantined by default; permanently deleted only if `delete_on_reject` is enabled) |
 
 Four built-in profiles are available in Config under NSFW Detection. Custom mode allows free-form threshold editing.
 
@@ -84,7 +84,7 @@ Four built-in profiles are available in Config under NSFW Detection. Custom mode
 
 - **Review:** New files awaiting your decision, with higher-risk items sorted to the top
 - **Approved:** Confirmed clean files with their contact sheets
-- **Quarantine:** Files pending your decision; Restore returns the video to its original location, Delete removes it permanently
+- **Quarantine:** Files pending your decision; Restore returns the video to its original location, Delete rejects it (quarantine by default; permanent delete only if `delete_on_reject` is enabled)
 - **Rejected:** Audit log of permanently removed files, with contact sheets available for review
 
 ---
@@ -130,6 +130,8 @@ NSFW detection powered by [NudeNet](https://github.com/notAI-tech/NudeNet), an o
 
 ## License
 
-Copyright (c) 2026 jckrbbt. All rights reserved.
+Safe Scanarr is licensed under the GNU General Public License v3.0 or later
+(GPL-3.0). See [LICENSE](./LICENSE) for the full license text.
 
-This source code is made available for personal reference only. No use, copying, modification, distribution, or deployment of this code is permitted without explicit written permission from the author.
+NSFW detection is powered by [NudeNet](https://github.com/notAI-tech/NudeNet),
+which is also licensed under GPL-3.0.
