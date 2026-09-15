@@ -44,7 +44,7 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 import config as config_module
-import auth
+from web import auth
 from config import Config
 from database import Database
 from pathutil import is_within, resolve_sheet
