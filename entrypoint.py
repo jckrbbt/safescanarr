@@ -5,13 +5,20 @@ entrypoint.py — starts poller, midnight scheduler, and web server.
 
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
 import traceback
 from datetime import datetime
+from pathlib import Path
 
-sys.path.insert(0, "/opt/safescanarr")
+# Derive the app directory from this file so the code works from any checkout
+# location (and keeps working for existing /opt/safescanarr installs).
+_APP_DIR = Path(__file__).resolve().parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
 from config import Config
 
 # Configure root logger once — all modules inherit this
@@ -24,7 +31,7 @@ if not root_log.handlers:
     root_log.addHandler(sh)
 log = logging.getLogger(__name__)
 
-SCANNER = "/opt/safescanarr/scanner.py"
+SCANNER = str(_APP_DIR / "scanner.py")
 
 
 def run_poller():
@@ -56,8 +63,13 @@ SCHEDULE_HOURS = {
     "hourly": list(range(24)),
 }
 
+# Guards against a scheduled scan being triggered twice concurrently.
+_scan_lock: "threading.Lock" = threading.Lock()
+_scan_proc = None
+
 
 def run_midnight_scheduler():
+    global _scan_proc
     log.info("Scan scheduler thread started")
     last_run_hour = -1
     while True:
@@ -71,11 +83,29 @@ def run_midnight_scheduler():
             now      = datetime.now()
 
             if now.hour in hours and now.hour != last_run_hour:
+                # Mark the hour as handled first so a still-running scan cannot
+                # cause a second trigger within the same hour.
                 last_run_hour = now.hour
-                log.info("=== Scheduled scan triggered (schedule=%s, hour=%d) ===",
-                         schedule, now.hour)
-                import subprocess
-                subprocess.run([sys.executable, SCANNER, "--scan"], check=False)
+                proc = _scan_proc
+                if proc is not None and proc.poll() is None:
+                    log.info("Scheduled scan skipped — a scan is still running (pid %s)",
+                             proc.pid)
+                elif not _scan_lock.acquire(blocking=False):
+                    log.info("Scheduled scan skipped — another trigger is already starting")
+                else:
+                    try:
+                        # Non-blocking: a long scan must not stall this loop.
+                        _scan_proc = subprocess.Popen(
+                            [sys.executable, SCANNER, "--scan"],
+                            stdout=open(cfg.LOG_FILE, "a"),
+                            stderr=subprocess.STDOUT,
+                        )
+                        log.info("=== Scheduled scan started (schedule=%s, hour=%d, pid=%d) ===",
+                                 schedule, now.hour, _scan_proc.pid)
+                    except Exception as e:
+                        log.error("Could not start scheduled scan: %s", e)
+                    finally:
+                        _scan_lock.release()
 
             # Find next scheduled hour for logging
             future = [h for h in hours if h > now.hour]
@@ -93,7 +123,8 @@ def run_midnight_scheduler():
 
 
 def run_web():
-    from web.server import app
+    from web.server import app, init_db
+    init_db()   # create/migrate schema once, at startup
     cfg = Config()
     log.info("Web UI starting on %s:%d", cfg.WEB_HOST, cfg.WEB_PORT)
     app.run(host=cfg.WEB_HOST, port=cfg.WEB_PORT, threaded=True, use_reloader=False, debug=False)

@@ -13,17 +13,24 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, "/opt/safescanarr")
+# Derive the app directory from this file so the code works from any checkout
+# location (and keeps working for existing /opt/safescanarr installs).
+_APP_DIR = Path(__file__).resolve().parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
 from config import Config
 from database import Database
+from pathutil import is_within
 
 log = logging.getLogger(__name__)
 
-SCANNER = "/opt/safescanarr/scanner.py"
+SCANNER = str(_APP_DIR / "scanner.py")
 
 
 def is_in_watched_folder(path: str, cfg: Config) -> bool:
-    return any(path.startswith(f) for f in cfg.WATCH_FOLDERS)
+    """True if *path* resolves inside a configured watch folder."""
+    return is_within(path, cfg.WATCH_FOLDERS)
 
 
 def trigger_scanner(file_path: str, source: str, cfg: Config) -> None:

@@ -6,8 +6,11 @@ State machine:
   max_confidence < zone_auto_approve  → approved  (auto, no review needed)
   zone_auto_approve ≤ conf < zone_quarantine → pending (review queue)
   zone_quarantine ≤ conf < zone_auto_reject  → quarantined (video moved)
-  conf ≥ zone_auto_reject             → rejected  (video deleted immediately)
-  zone_auto_reject_days = 0           → quarantine skipped, straight to reject
+  conf ≥ zone_auto_reject             → rejected
+
+Rejected items are *moved to quarantine* by default; permanent deletion (and
+the arr blacklist/re-search flow) only happens when the operator explicitly
+sets ``delete_on_reject`` to true in the config.
 """
 
 import argparse
@@ -18,13 +21,20 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, "/opt/safescanarr")
+# Derive the app directory from this file so the code works from any checkout
+# location (and keeps working for existing /opt/safescanarr installs).
+_APP_DIR = Path(__file__).resolve().parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
 from config import Config as _ConfigClass
 from database import Database
+from pathutil import sheet_filename, resolve_sheet
 
 # When run as subprocess from entrypoint, stdout is redirected to the log file
 # by the parent process. Just log to stdout — no FileHandler needed.
@@ -78,7 +88,7 @@ def get_vcsi_bin() -> str:
 
 def generate_vcs(video_path: Path, output_dir: Path, cfg, db: Database) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_file = output_dir / (video_path.stem + ".jpg")
+    out_file = output_dir / sheet_filename(video_path)
 
     cmd = [
         get_vcsi_bin(),
@@ -124,13 +134,15 @@ def analyse_video_file(video_path: Path, cfg) -> dict:
 
 
 def determine_state(max_conf: float, cfg) -> str:
-    """
-    Apply zone thresholds to determine the review state.
-      >= zone_auto_reject  → rejected immediately
-      >= zone_quarantine   → quarantined (video moved)
-      < zone_auto_approve  → approved automatically
-      else                 → pending (review queue)
-    quarantine_auto_reject_days: 0 = never auto-reject, >0 = reject after N days
+    """Map a max NSFW confidence score onto a review state.
+
+      conf >= zone_auto_reject   → "rejected"
+      conf >= zone_quarantine    → "quarantined" (video moved to quarantine)
+      conf >= zone_auto_approve  → "pending"     (manual review queue)
+      otherwise                  → "approved"    (auto-approved)
+
+    How a "rejected" verdict is *carried out* (permanent delete vs quarantine)
+    is controlled by cfg.DELETE_ON_REJECT, not by this function.
     """
     if max_conf >= cfg.ZONE_AUTO_REJECT:
         return "rejected"
@@ -165,17 +177,43 @@ def action_quarantine(video_path: Path, cfg, db: Database,
 def action_reject(video_path: Path, cfg, db: Database,
                   abs_path: str, nudenet_result: dict,
                   sheet_path: Path = None,
-                  from_quarantine: bool = False) -> None:
-    """Delete video permanently. Sheet is retained for audit trail."""
-    target = video_path
-    if target.exists():
-        target.unlink()
-        log.warning("REJECTED (deleted): %s", target)
+                  from_quarantine: bool = False) -> str | None:
+    """Carry out a reject verdict.
 
-    # Sheet is intentionally kept — hidden in UI until user clicks to reveal
+    Safe by default: the video is moved to quarantine and the quarantine path is
+    returned. Permanent deletion (plus the arr blacklist / re-search flow) only
+    happens when the operator has explicitly enabled ``delete_on_reject``; in
+    that case the video is removed and None is returned.
+    """
+    if cfg.DELETE_ON_REJECT:
+        target = video_path
+        if target.exists():
+            target.unlink()
+            log.warning("REJECTED (deleted): %s", target)
+        # Sheet is intentionally kept — hidden in UI until user clicks to reveal
+        _send_webhook(cfg, "rejected", abs_path, nudenet_result)
+        _blacklist(abs_path, cfg)
+        return None
 
-    _send_webhook(cfg, "rejected", abs_path, nudenet_result)
-    _blacklist(abs_path, cfg)
+    # Quarantine-only (default) mode
+    q_dir = Path(cfg.QUARANTINE_DIR)
+    q_dir.mkdir(parents=True, exist_ok=True)
+    q_path = q_dir / video_path.name
+    if q_path.exists():
+        q_path = q_dir / f"{video_path.stem}_{int(datetime.now().timestamp())}{video_path.suffix}"
+    if video_path.exists():
+        shutil.move(str(video_path), str(q_path))
+        log.warning("REJECTED (quarantined, delete_on_reject=false): %s → %s", abs_path, q_path)
+    _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
+    return str(q_path)
+
+
+def _url_host(url: str) -> str:
+    """Hostname only — webhook/arr URLs frequently embed secrets."""
+    try:
+        return urllib.parse.urlsplit(url).hostname or "?"
+    except ValueError:
+        return "?"
 
 
 def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
@@ -230,9 +268,10 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
             method="POST",
         )
         urllib.request.urlopen(req, timeout=10)
-        log.info("Webhook sent: %s → %s", event, cfg.WEBHOOK_URL)
+        log.info("Webhook sent: %s → %s", event, _url_host(cfg.WEBHOOK_URL))
+        log.debug("Webhook sent: %s → %s", event, cfg.WEBHOOK_URL)
     except Exception as e:
-        log.warning("Webhook failed: %s", e)
+        log.warning("Webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), e)
 
 
 def _api_request(url: str, api_key: str, method: str = "GET", body: dict = None):
@@ -246,7 +285,9 @@ def _api_request(url: str, api_key: str, method: str = "GET", body: dict = None)
         with urllib.request.urlopen(req, timeout=10) as r:
             raw = r.read()
             return json.loads(raw) if raw else {}
-    except Exception:
+    except Exception as e:
+        log.warning("Arr API request failed: method=%s host=%s error=%s",
+                    method, _url_host(url), e)
         return None
 
 
@@ -411,7 +452,7 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
                        review_state="pending")
         return
 
-    sheet_path = output_dir / (video.stem + ".jpg")
+    sheet_path = output_dir / sheet_filename(video)
 
     # 2. NSFW analysis on source video frames
     nudenet_result = analyse_video_file(video, cfg)
@@ -428,10 +469,19 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
         quarantine_path = action_quarantine(video, cfg, db, abs_path, nudenet_result)
 
     elif state == "rejected":
-        action_reject(video, cfg, db, abs_path, nudenet_result, sheet_path=sheet_path)
-        db.upsert_file(abs_path, name, size, mtime, status="ok",
-                       review_state="rejected", flagged=True,
-                       flag_reason=flag_reason, nsfw_confidence=max_conf)
+        quarantine_path = action_reject(video, cfg, db, abs_path, nudenet_result,
+                                        sheet_path=sheet_path)
+        if quarantine_path:
+            # Safe mode: the video is now in quarantine, awaiting review.
+            db.upsert_file(abs_path, name, size, mtime, status="ok",
+                           review_state="quarantined", flagged=True,
+                           flag_reason=flag_reason, nsfw_confidence=max_conf)
+            db.set_review_state(abs_path, "quarantined",
+                                quarantine_path=quarantine_path, source="auto")
+        else:
+            db.upsert_file(abs_path, name, size, mtime, status="ok",
+                           review_state="rejected", flagged=True,
+                           flag_reason=flag_reason, nsfw_confidence=max_conf)
         return
 
     # 4. Save to DB
@@ -507,9 +557,13 @@ def run_scan(db: Database) -> None:
     if cfg.QUARANTINE_AUTO_REJECT_DAYS > 0:
         stale = db.get_stale_quarantined(cfg.QUARANTINE_AUTO_REJECT_DAYS)
         for row in stale:
+            if not cfg.DELETE_ON_REJECT:
+                log.info("Leaving stale quarantine in place (delete_on_reject=false): %s",
+                         row["path"])
+                continue
             log.info("Auto-rejecting stale quarantine: %s", row["path"])
             q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
-            sheet  = Path(cfg.OUTPUT_DIR) / (Path(row["path"]).stem + ".jpg")
+            sheet  = resolve_sheet(cfg.OUTPUT_DIR, row["path"])
             if q_path and q_path.exists():
                 q_path.unlink()
             if sheet.exists():

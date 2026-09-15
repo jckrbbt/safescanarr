@@ -9,10 +9,15 @@ review_state values:
   rejected    — confirmed bad; video deleted, sheet deleted
 """
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from pathutil import is_within, resolve_sheet
+
+log = logging.getLogger(__name__)
 
 
 CREATE_FILES = """
@@ -74,6 +79,7 @@ class Database:
         self._con = sqlite3.connect(db_path, check_same_thread=False)
         self._con.row_factory = sqlite3.Row
         self._con.execute("PRAGMA journal_mode=WAL;")
+        self._con.execute("PRAGMA busy_timeout=10000;")
         self._con.execute(CREATE_FILES)
         self._con.execute(CREATE_ERRORS)
         self._con.execute(CREATE_STATE)
@@ -92,11 +98,17 @@ class Database:
         cols = [r[1] for r in self._con.execute("PRAGMA table_info(files)").fetchall()]
         for sql in MIGRATIONS:
             col = sql.split("ADD COLUMN")[1].strip().split()[0]
-            if col not in cols:
-                try:
-                    self._con.execute(sql)
-                except Exception:
-                    pass
+            if col in cols:
+                continue
+            try:
+                self._con.execute(sql)
+            except sqlite3.OperationalError as e:
+                # Two processes racing to migrate is harmless; anything else
+                # (lock contention, corrupt schema) is worth surfacing.
+                if "duplicate column" not in str(e).lower():
+                    log.warning("Migration for column %s failed: %s", col, e)
+            except sqlite3.DatabaseError as e:
+                log.warning("Migration for column %s failed: %s", col, e)
         self._con.commit()
 
     # ------------------------------------------------------------------
@@ -111,8 +123,8 @@ class Database:
 
     def upsert_file(self, path: str, name: str, size: int, mtime: float,
                     status: str = "ok", review_state: str = "pending",
-                    flagged: bool = False, flag_reason: str = None,
-                    nsfw_confidence: float = None,
+                    flagged: bool = False, flag_reason: Optional[str] = None,
+                    nsfw_confidence: Optional[float] = None,
                     state_source: str = "auto") -> None:
         now = datetime.now(timezone.utc).isoformat()
         is_new = self.get_file(path) is None
@@ -147,7 +159,7 @@ class Database:
                 self._bump_lifetime(f"{review_state}_{state_source or 'auto'}")
 
     def set_review_state(self, path: str, state: str,
-                         quarantine_path: str = None,
+                         quarantine_path: Optional[str] = None,
                          source: str = "user") -> None:
         prev_row   = self.get_file(path)
         prev_state = prev_row["review_state"] if prev_row else None
@@ -179,10 +191,29 @@ class Database:
         return cur.fetchall()
 
     def find_file_by_stem(self, stem: str) -> Optional[sqlite3.Row]:
-        cur = self._con.execute(
-            "SELECT * FROM files WHERE name LIKE ?", (stem + ".%",)
+        """Find a file by its stem (filename without extension).
+
+        LIKE wildcards in *stem* are escaped so a stem containing ``%`` or ``_``
+        cannot match unintended rows. When several rows match, the most recently
+        updated one is used and the ambiguity is logged.
+        """
+        escaped = (
+            stem.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
         )
-        return cur.fetchone()
+        cur = self._con.execute(
+            "SELECT * FROM files WHERE name LIKE ? ESCAPE '\\' "
+            "ORDER BY updated_at DESC LIMIT 10",
+            (escaped + ".%",),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return None
+        if len(rows) > 1:
+            log.warning("Ambiguous stem %r matched %d files — using most recent (%s)",
+                        stem, len(rows), rows[0]["path"])
+        return rows[0]
 
     def get_stats(self) -> dict:
         cur = self._con.execute(
@@ -267,14 +298,14 @@ class Database:
 
         for row in rows:
             path     = Path(row["path"])
-            in_watch = any(row["path"].startswith(f) for f in watch_folders)
+            in_watch = is_within(row["path"], watch_folders)
             state    = row["review_state"]
 
             # Skip quarantined — source was intentionally moved, not missing
             if state == "quarantined":
                 continue
 
-            sheet_file    = Path(output_dir) / (path.stem + ".jpg") if output_dir else None
+            sheet_file    = resolve_sheet(output_dir, row["path"]) if output_dir else None
             sheet_missing = sheet_file is not None and not sheet_file.exists()
 
             if not path.exists() or not in_watch or sheet_missing:
@@ -300,10 +331,14 @@ class Database:
         )
         self._con.commit()
 
-    def _set_lifetime(self, key: str, count: int) -> None:
+    def _seed_lifetime(self, key: str, count: int) -> None:
+        """Seed a lifetime counter only if it has never been set.
+
+        INSERT OR IGNORE makes this atomic, so a concurrent process (or a
+        second Database open) can never clobber an existing counter.
+        """
         self._con.execute(
-            "INSERT INTO lifetime_stats (key, count) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET count = excluded.count",
+            "INSERT OR IGNORE INTO lifetime_stats (key, count) VALUES (?, ?)",
             (key, count),
         )
         self._con.commit()
@@ -317,9 +352,9 @@ class Database:
         if self.get_poller_state("lifetime_seeded") == "1":
             return
         cur = self._con.execute("SELECT COUNT(*) as c FROM files")
-        self._set_lifetime("total_scanned", cur.fetchone()["c"])
+        self._seed_lifetime("total_scanned", cur.fetchone()["c"])
         cur = self._con.execute("SELECT COUNT(*) as c FROM files WHERE flagged = 1")
-        self._set_lifetime("total_flagged", cur.fetchone()["c"])
+        self._seed_lifetime("total_flagged", cur.fetchone()["c"])
         cur = self._con.execute(
             "SELECT review_state, state_source, COUNT(*) as c FROM files "
             "WHERE review_state IN ('approved', 'quarantined', 'rejected') "
@@ -327,7 +362,7 @@ class Database:
         )
         for r in cur.fetchall():
             source = r["state_source"] or "auto"
-            self._set_lifetime(f"{r['review_state']}_{source}", r["c"])
+            self._seed_lifetime(f"{r['review_state']}_{source}", r["c"])
         self.set_poller_state("lifetime_seeded", "1")
 
     # ------------------------------------------------------------------
