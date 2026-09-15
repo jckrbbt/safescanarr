@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 """
-safescanarr/web/server.py v0.6
+safescanarr/web/server.py v0.7
+
+Auth model
+----------
+Every route except ``/static/*``, ``/login`` and ``/health`` requires a single
+shared token:
+
+  * browsers: POST the token to ``/login`` once, which sets a session cookie
+  * API clients: send ``X-Auth-Token: <token>`` (or ``Authorization: Bearer``)
+
+All state-changing requests are CSRF-protected: same-origin is enforced via
+Origin/Referer, and either the session CSRF token (header ``X-CSRF-Token``) or
+a valid ``X-Auth-Token`` header must be present.
 """
 
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -12,39 +25,220 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
 from flask import (
-    Flask, after_this_request, jsonify, request,
-    send_file, send_from_directory, render_template,
+    Flask, after_this_request, jsonify, redirect, request,
+    send_file, send_from_directory, render_template, session,
 )
 
-sys.path.insert(0, "/opt/safescanarr")
+# Derive the app directory from this file so the code works from any checkout
+# location (and keeps working for existing /opt/safescanarr installs).
+_APP_DIR = Path(__file__).resolve().parent.parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
 import config as config_module
+import auth
 from config import Config
 from database import Database
+from pathutil import is_within, resolve_sheet
 
 log = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates", static_folder="static")
-SCANNER = "/opt/safescanarr/scanner.py"
+SCANNER = str(_APP_DIR / "scanner.py")
+
+# ── Upload / archive limits ───────────────────────────────────────
+MAX_UPLOAD_BYTES      = 512 * 1024 * 1024        # request body cap
+MAX_ZIP_ENTRIES       = 20000                    # entries per restore archive
+MAX_ZIP_UNCOMPRESSED  = 2 * 1024 * 1024 * 1024   # total uncompressed bytes cap
+
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.secret_key = hashlib.sha256(
+    ("safescanarr-session:" + (auth.token() or "unset")).encode()
+).hexdigest()
+
+PUBLIC_PATHS = {"/login", "/health"}
 
 
-def get_db():
-    return Database(Config().DB_FILE)
+# ── Database (initialised once per process, not per request) ──────
+_db = None
+_db_lock = threading.Lock()
+
+
+def get_db() -> Database:
+    """Return the process-wide Database, initialising/migrating on first use."""
+    global _db
+    if _db is None:
+        with _db_lock:
+            if _db is None:
+                _db = Database(Config().DB_FILE)
+    return _db
+
+
+def init_db() -> Database:
+    """Explicitly initialise the database (called at startup)."""
+    return get_db()
+
+
+def _reset_db() -> None:
+    """Drop the shared connection so the next request re-opens the DB file."""
+    global _db
+    with _db_lock:
+        if _db is not None:
+            try:
+                _db.close()
+            except Exception as e:  # pragma: no cover - best effort
+                log.warning("Error closing database: %s", e)
+            _db = None
+
+
+# ── Auth / CSRF ───────────────────────────────────────────────────
+def _supplied_token() -> str:
+    tok = request.headers.get("X-Auth-Token", "")
+    if tok:
+        return tok.strip()
+    authz = request.headers.get("Authorization", "")
+    if authz.lower().startswith("bearer "):
+        return authz[7:].strip()
+    return ""
+
+
+def _origin_ok() -> bool:
+    """Reject cross-origin state-changing requests (CSRF defence in depth)."""
+    host = (request.host or "").split(":")[0].lower()
+    for header in ("Origin", "Referer"):
+        value = request.headers.get(header)
+        if not value:
+            continue
+        try:
+            src_host = (urllib.parse.urlsplit(value).hostname or "").lower()
+        except ValueError:
+            return False
+        if src_host and src_host != host:
+            return False
+    return True
+
+
+def _ensure_csrf() -> str:
+    if not session.get("csrf"):
+        session["csrf"] = os.urandom(24).hex()
+    return session["csrf"]
+
+
+def _csrf_ok() -> bool:
+    # A valid auth token in a custom header cannot be forged by a cross-site
+    # request (custom headers require a CORS preflight), so it also proves intent.
+    if auth.check(_supplied_token()):
+        return True
+    expected = session.get("csrf")
+    if not expected:
+        return False
+    supplied = request.headers.get("X-CSRF-Token", "")
+    if not supplied and request.form:
+        supplied = request.form.get("csrf_token", "")
+    return bool(supplied) and supplied == expected
+
+
+def _deny():
+    if request.path.startswith("/api/"):
+        return jsonify({"status": "error", "message": "Authentication required"}), 401
+    return redirect("/login")
+
+
+@app.before_request
+def _require_auth():
+    path = request.path
+    if path.startswith("/static/") or path in PUBLIC_PATHS:
+        return None
+
+    token = auth.token()
+    if not token:
+        # Fail closed — no token could be resolved.
+        if path.startswith("/api/"):
+            return jsonify({"status": "error", "message": "Authentication unavailable"}), 503
+        return "Authentication unavailable", 503
+
+    if not session.get("authed"):
+        supplied = _supplied_token()
+        if supplied and auth.check(supplied):
+            session.clear()
+            session["authed"] = True
+        else:
+            return _deny()
+
+    _ensure_csrf()
+
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if not _origin_ok():
+            log.warning("Rejected cross-origin %s %s", request.method, path)
+            return jsonify({"status": "error", "message": "Cross-origin request rejected"}), 403
+        if not _csrf_ok():
+            return jsonify({"status": "error", "message": "Invalid CSRF token"}), 403
+    return None
+
+
+@app.errorhandler(413)
+def _too_large(_e):
+    return jsonify({"status": "error", "message": "Upload too large"}), 413
+
+
+# ── Login ─────────────────────────────────────────────────────────
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        if session.get("authed"):
+            return redirect("/")
+        return render_template("login.html", version=Config.version())
+
+    if not _origin_ok():
+        return jsonify({"status": "error", "message": "Cross-origin request rejected"}), 403
+
+    body = request.get_json(silent=True) or request.form or {}
+    supplied = str(body.get("token", "")).strip()
+    if not auth.check(supplied):
+        log.warning("Failed login attempt from %s", request.remote_addr)
+        return jsonify({"status": "error", "message": "Invalid token"}), 401
+
+    session.clear()
+    session["authed"] = True
+    session["csrf"] = os.urandom(24).hex()
+    log.info("Login OK from %s", request.remote_addr)
+    return jsonify({"status": "ok", "csrf_token": session["csrf"]})
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/health")
+def health():
+    """Unauthenticated liveness probe — deliberately reveals nothing else."""
+    return jsonify({"status": "ok"})
 
 
 # ── UI ────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html", version=Config.version())
+    return render_template("index.html", version=Config.version(),
+                           csrf_token=session.get("csrf", ""))
 
 
 @app.route("/api/version")
 def api_version():
-    return jsonify({"version": Config.version()})
+    return jsonify({
+        "version": Config.version(),
+        "delete_on_reject": Config().DELETE_ON_REJECT,
+    })
 
 
 # ── Stats ─────────────────────────────────────────────────────────
@@ -77,7 +271,7 @@ def api_sheets():
         row_source = row["state_source"] if "state_source" in row.keys() else None
         if source and row_source != source:
             continue
-        sheet_file = output_dir / (stem + ".jpg")
+        sheet_file = resolve_sheet(output_dir, row["path"])
         sheets.append({
             "stem":            stem,
             "filename":        sheet_file.name,
@@ -135,7 +329,12 @@ def api_approve():
 
 @app.route("/api/sheets/reject", methods=["POST"])
 def api_reject():
-    """Reject one or more sheets — delete video permanently."""
+    """Reject one or more sheets.
+
+    Safe by default: the video is *moved to quarantine*. Permanent deletion
+    (plus the arr blacklist/re-search flow) only happens when the config flag
+    ``delete_on_reject`` is explicitly enabled.
+    """
     data  = request.get_json() or {}
     stems = data.get("stems", [])
     if not stems:
@@ -151,20 +350,36 @@ def api_reject():
         if not row:
             continue
 
-        # Delete video — from quarantine or original location
-        video_path = Path(row["quarantine_path"] or row["path"])
-        if video_path.exists():
-            video_path.unlink()
-            log.info("Rejected (deleted): %s", video_path)
+        source_path = row["path"]
+        video_path  = Path(row["quarantine_path"] or row["path"])
 
-        # Keep sheet for audit trail — hidden in UI until user clicks to reveal
+        if cfg.DELETE_ON_REJECT:
+            if video_path.exists():
+                video_path.unlink()
+                log.warning("Rejected (deleted): %s", video_path)
+            # Blacklist so the arr stack does not re-import the release
+            _blacklist_path(source_path, cfg)
+            db.set_review_state(source_path, "rejected")
+        else:
+            if row["review_state"] == "quarantined" and row["quarantine_path"]:
+                q_path = Path(row["quarantine_path"])   # already quarantined
+            elif video_path.exists():
+                q_dir = Path(cfg.QUARANTINE_DIR)
+                q_dir.mkdir(parents=True, exist_ok=True)
+                q_path = q_dir / video_path.name
+                if q_path.exists():
+                    q_path = q_dir / f"{video_path.stem}_{int(datetime.datetime.now().timestamp())}{video_path.suffix}"
+                shutil.move(str(video_path), str(q_path))
+                log.warning("Rejected (quarantined, delete_on_reject=false): %s -> %s",
+                            source_path, q_path)
+            else:
+                q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
+            db.set_review_state(source_path, "quarantined",
+                                quarantine_path=str(q_path) if q_path else None)
 
-        # Blacklist
-        _blacklist_path(row["path"], cfg)
-
-        db.set_review_state(row["path"], "rejected")
         done.append(stem)
-    return jsonify({"status": "ok", "rejected": done})
+    return jsonify({"status": "ok", "rejected": done,
+                    "mode": "delete" if cfg.DELETE_ON_REJECT else "quarantine"})
 
 
 @app.route("/api/sheets/quarantine", methods=["POST"])
@@ -184,6 +399,8 @@ def api_quarantine():
     q_dir  = Path(cfg.QUARANTINE_DIR)
     q_dir.mkdir(parents=True, exist_ok=True)
     q_path = q_dir / video_path.name
+    if q_path.exists():
+        q_path = q_dir / f"{video_path.stem}_{int(datetime.datetime.now().timestamp())}{video_path.suffix}"
     shutil.move(str(video_path), str(q_path))
     db.set_review_state(row["path"], "quarantined", quarantine_path=str(q_path))
     return jsonify({"status": "ok", "quarantine_path": str(q_path)})
@@ -211,44 +428,133 @@ def api_requeue():
 
 
 # ── Config ────────────────────────────────────────────────────────
+_CONFIG_KEYS = {
+    "watch_folders", "sonarr_url", "sonarr_api_key", "radarr_url", "radarr_api_key",
+    "polling_enabled", "poll_interval_seconds", "scan_schedule_enabled", "scan_schedule",
+    "detection_profile", "zone_auto_approve", "zone_quarantine", "zone_auto_reject",
+    "nudenet_frames", "nudenet_threshold", "quarantine_dir",
+    "quarantine_auto_reject_days", "delete_on_reject", "webhook_url",
+    "webhook_on_review", "webhook_on_quarantine", "webhook_on_reject", "web_ui_url",
+    "vcs_grid", "vcsi_timeout_seconds",
+}
+_CONFIG_BOOLS = {
+    "polling_enabled", "scan_schedule_enabled", "delete_on_reject",
+    "webhook_on_review", "webhook_on_quarantine", "webhook_on_reject",
+}
+_CONFIG_INTS = {
+    "poll_interval_seconds", "nudenet_frames", "quarantine_auto_reject_days",
+    "vcsi_timeout_seconds",
+}
+_CONFIG_FLOATS = {
+    "zone_auto_approve", "zone_quarantine", "zone_auto_reject", "nudenet_threshold",
+}
+_CONFIG_STRS = {
+    "sonarr_url", "sonarr_api_key", "radarr_url", "radarr_api_key", "scan_schedule",
+    "detection_profile", "quarantine_dir", "webhook_url", "web_ui_url", "vcs_grid",
+}
+_SECRET_KEYS = {"sonarr_api_key", "radarr_api_key"}
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _validate_watch_folders(value, errors: list) -> list:
+    if isinstance(value, str):
+        value = [p.strip() for p in value.split(",") if p.strip()]
+    if not isinstance(value, list):
+        errors.append("watch_folders must be a list of paths")
+        return []
+    folders = []
+    for item in value:
+        if item in (None, ""):
+            continue
+        if not isinstance(item, str):
+            errors.append("watch_folders entries must be strings")
+            continue
+        p = Path(item.strip())
+        if not p.is_absolute():
+            errors.append(f"watch folder must be an absolute path: {item}")
+            continue
+        if not p.is_dir():
+            errors.append(f"watch folder does not exist: {item}")
+            continue
+        folders.append(str(p))
+    return folders
+
+
+def _build_config_update(data: dict):
+    """Whitelist + type-check + path-validate an incoming config payload."""
+    clean: dict = {}
+    errors: list = []
+    for key, value in data.items():
+        if key not in _CONFIG_KEYS:
+            continue                       # ignore unknown / derived / non-writable keys
+        if key in _CONFIG_BOOLS:
+            clean[key] = _coerce_bool(value)
+        elif key in _CONFIG_INTS:
+            try:
+                clean[key] = int(value)
+            except (TypeError, ValueError):
+                errors.append(f"{key} must be an integer")
+        elif key in _CONFIG_FLOATS:
+            try:
+                clean[key] = float(value)
+            except (TypeError, ValueError):
+                errors.append(f"{key} must be a number")
+        elif key == "watch_folders":
+            clean[key] = _validate_watch_folders(value, errors)
+        elif key in _CONFIG_STRS:
+            if not isinstance(value, str):
+                errors.append(f"{key} must be a string")
+                continue
+            val = value.strip()
+            if key in _SECRET_KEYS and val == "":
+                continue                   # blank secret = leave unchanged (UI masks it)
+            clean[key] = val
+
+    # Path validation for quarantine_dir
+    qdir = clean.get("quarantine_dir")
+    if qdir:
+        p = Path(qdir)
+        if not p.is_absolute():
+            errors.append("quarantine_dir must be an absolute path")
+        elif p.exists() and not p.is_dir():
+            errors.append("quarantine_dir exists and is not a directory")
+    return clean, errors
+
+
 @app.route("/api/config", methods=["GET"])
 def api_config_get():
-    return jsonify(config_module.get())
+    """Return config with secrets masked (arr API keys reported as set/not-set)."""
+    cfg = config_module.get()
+    cfg.pop("auth_token", None)                       # never expose the auth token
+    cfg["sonarr_api_key_set"] = bool(cfg.pop("sonarr_api_key", ""))
+    cfg["radarr_api_key_set"] = bool(cfg.pop("radarr_api_key", ""))
+    return jsonify(cfg)
 
 
 @app.route("/api/config", methods=["POST"])
 def api_config_save():
-    data = request.get_json()
-    if not data:
+    data = request.get_json(silent=True)
+    if not data or not isinstance(data, dict):
         return jsonify({"status": "error", "message": "No JSON body"}), 400
     try:
-        existing = config_module.get()
-        existing.update(data)
-        # Remove derived fields
-        existing.pop("output_dir", None)
-        # Type coercions
-        existing["poll_interval_seconds"]      = int(existing.get("poll_interval_seconds", 600))
-        existing["vcsi_timeout_seconds"]       = int(existing.get("vcsi_timeout_seconds", 300))
-        existing["nudenet_frames"]             = int(existing.get("nudenet_frames", 10))
-        existing["nudenet_threshold"]          = float(existing.get("nudenet_threshold", 0.1))
-        existing["zone_auto_approve"]          = float(existing.get("zone_auto_approve", 0.1))
-        existing["zone_quarantine"]            = float(existing.get("zone_quarantine", 0.4))
-        existing["zone_auto_reject"]           = float(existing.get("zone_auto_reject", 0.85))
-        existing["quarantine_auto_reject_days"]= int(existing.get("quarantine_auto_reject_days", 0))
-        existing["polling_enabled"]            = bool(existing.get("polling_enabled", False))
-        existing["scan_schedule_enabled"]      = bool(existing.get("scan_schedule_enabled", False))
-        existing["webhook_on_review"]          = bool(existing.get("webhook_on_review", False))
-        existing["webhook_on_quarantine"]      = bool(existing.get("webhook_on_quarantine", True))
-        existing["webhook_on_reject"]          = bool(existing.get("webhook_on_reject", True))
-        if isinstance(existing.get("watch_folders"), str):
-            existing["watch_folders"] = [
-                p.strip() for p in existing["watch_folders"].split(",") if p.strip()
-            ]
+        clean, errors = _build_config_update(data)
+        if errors:
+            return jsonify({"status": "error", "message": "; ".join(errors)}), 400
+
+        existing = config_module.raw()
+        existing.update(clean)
         config_module.save(existing)
         return jsonify({"status": "ok"})
     except Exception as e:
-        log.error("Failed to save config: %s", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        log.exception("Failed to save config")
+        return jsonify({"status": "error", "message": "Failed to save configuration"}), 500
 
 
 @app.route("/api/config/test-sonarr", methods=["POST"])
@@ -282,7 +588,7 @@ def api_test_webhook():
         "risk":      0.75,
         "labels":    ["FEMALE_BREAST_EXPOSED"],
         "message":   f"Quarantined: {title} (risk: 75%)",
-        "timestamp": __import__("datetime").datetime.now().isoformat(),
+        "timestamp": datetime.datetime.now().isoformat(),
     }
     if cfg.WEB_UI_URL:
         body["url"] = f"{cfg.WEB_UI_URL.rstrip('/')}/?tab=quarantined"
@@ -295,7 +601,8 @@ def api_test_webhook():
         urllib.request.urlopen(req, timeout=10)
         return jsonify({"status": "ok"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 502
+        log.warning("Test webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), e)
+        return jsonify({"status": "error", "message": "Webhook delivery failed"}), 502
 
 
 @app.route("/api/db/clean", methods=["POST"])
@@ -333,8 +640,9 @@ def api_backup_db():
             src.backup(dest)
         dest.close(); src.close()
     except Exception as e:
+        log.warning("Database backup failed: %s", e)
         os.unlink(tmp.name)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": "Backup failed"}), 500
     _schedule_cleanup(tmp.name)
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     return send_file(tmp.name, as_attachment=True,
@@ -358,8 +666,9 @@ def api_backup_vcs():
             for jpg in sorted(out_dir.glob("*.jpg")):
                 z.write(jpg, arcname=jpg.name)
     except Exception as e:
+        log.warning("VCS backup failed: %s", e)
         os.unlink(tmp.name)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": "Backup failed"}), 500
     _schedule_cleanup(tmp.name)
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     return send_file(tmp.name, as_attachment=True,
@@ -375,7 +684,8 @@ def api_restore_db():
         return jsonify({"status": "error", "message": "No file uploaded"}), 400
     cfg = Config()
     db  = get_db()
-    if db.get_scan_pid():
+    pid = db.get_scan_pid()
+    if pid and _pid_is_scanner(pid):
         return jsonify({"status": "error", "message": "Stop the running scan before restoring"}), 409
     # Validate SQLite magic header
     head = f.read(16)
@@ -398,11 +708,27 @@ def api_restore_db():
                 stale.unlink()
         os.replace(tmp_path, db_path)
     except Exception as e:
+        log.warning("Database restore failed: %s", e)
         if os.path.exists(tmp_path):
             try: os.unlink(tmp_path)
             except OSError: pass
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": "Restore failed"}), 500
+    # The shared connection still points at the old inode.
+    _reset_db()
     return jsonify({"status": "ok"})
+
+
+def _zip_entry_is_safe(name: str) -> bool:
+    """Reject absolute paths and any traversal segments in an archive entry."""
+    if not name:
+        return False
+    normalised = name.replace("\\", "/")
+    if normalised.startswith("/") or normalised.startswith("../"):
+        return False
+    parts = [p for p in normalised.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        return False
+    return True
 
 
 @app.route("/api/backup/restore/vcs", methods=["POST"])
@@ -421,13 +747,30 @@ def api_restore_vcs():
         f.save(tmp_path)
         if not zipfile.is_zipfile(tmp_path):
             return jsonify({"status": "error", "message": "Not a zip archive"}), 400
-        # Wipe existing thumbnails so the restore is a true replacement
-        for existing in out_dir.glob("*.jpg"):
-            existing.unlink()
-        extracted = 0
+
         with zipfile.ZipFile(tmp_path) as z:
-            for info in z.infolist():
-                # Flatten any subdir structure; reject path-traversal attempts
+            infos = z.infolist()
+            # ── Validate before touching anything on disk (zip-bomb guards) ──
+            if len(infos) > MAX_ZIP_ENTRIES:
+                return jsonify({"status": "error",
+                                "message": "Archive has too many entries"}), 400
+            total_uncompressed = 0
+            for info in infos:
+                if not _zip_entry_is_safe(info.filename):
+                    return jsonify({"status": "error",
+                                    "message": "Archive contains unsafe paths"}), 400
+                total_uncompressed += info.file_size
+                if total_uncompressed > MAX_ZIP_UNCOMPRESSED:
+                    return jsonify({"status": "error",
+                                    "message": "Archive expands to too much data"}), 400
+
+            # Wipe existing thumbnails so the restore is a true replacement
+            for existing in out_dir.glob("*.jpg"):
+                existing.unlink()
+
+            extracted = 0
+            for info in infos:
+                # Flatten any subdir structure; only .jpg files are stored
                 name = os.path.basename(info.filename)
                 if not name or not name.lower().endswith(".jpg"):
                     continue
@@ -436,7 +779,8 @@ def api_restore_vcs():
                     shutil.copyfileobj(src, dst)
                 extracted += 1
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        log.warning("VCS restore failed: %s", e)
+        return jsonify({"status": "error", "message": "Restore failed"}), 500
     finally:
         try: os.unlink(tmp_path)
         except OSError: pass
@@ -444,36 +788,86 @@ def api_restore_vcs():
 
 
 # ── Filesystem browser (used by Watch Folders picker) ──────────────
+def _browse_roots(cfg: Config) -> list:
+    """Resolved directories the file browser is allowed to walk."""
+    roots = []
+    for folder in cfg.WATCH_FOLDERS or []:
+        if not folder:
+            continue
+        try:
+            roots.append(Path(folder).resolve())
+        except OSError:
+            continue
+    if not roots:
+        # Onboarding: nothing configured yet, so allow the historical default
+        # mount points only (still nothing outside them).
+        for candidate in ("/mnt", "/media"):
+            p = Path(candidate)
+            if p.is_dir():
+                roots.append(p.resolve())
+    return roots
+
+
 @app.route("/api/fs/list")
 def api_fs_list():
-    """List subdirectories at the given path. Hidden dirs are skipped."""
+    """List subdirectories, restricted to configured watch-folder roots."""
+    cfg  = Config()
+    roots = _browse_roots(cfg)
+    if not roots:
+        return jsonify({"status": "error", "message": "Forbidden"}), 403
+
     raw = request.args.get("path", "").strip()
     if not raw:
-        # Default starting point: prefer /mnt or /media if present, else /
-        for candidate in ("/mnt", "/media", "/"):
-            if os.path.isdir(candidate):
-                raw = candidate
-                break
-    path = os.path.abspath(raw)
-    if not os.path.isdir(path):
-        return jsonify({"status": "error", "message": f"Not a directory: {path}"}), 400
+        raw = str(roots[0])
+    try:
+        path = Path(raw).resolve()
+    except (OSError, ValueError):
+        return jsonify({"status": "error", "message": "Forbidden"}), 403
+
+    if not is_within(path, roots):
+        log.warning("fs/list denied outside watch roots: %s", path)
+        return jsonify({"status": "error", "message": "Forbidden"}), 403
+
+    if not path.is_dir():
+        return jsonify({"status": "error", "message": "Not a directory"}), 400
+
     try:
         entries = []
         for name in sorted(os.listdir(path)):
             if name.startswith("."):
                 continue
-            full = os.path.join(path, name)
+            full = path / name
             try:
-                if os.path.isdir(full):
-                    entries.append({"name": name, "path": full})
+                if full.is_dir():
+                    entries.append({"name": name, "path": str(full)})
             except OSError:
                 continue
     except PermissionError:
         return jsonify({"status": "error", "message": "Permission denied"}), 403
     except OSError as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-    parent = os.path.dirname(path) if path not in ("/", "") else None
-    return jsonify({"path": path, "parent": parent, "entries": entries})
+        log.warning("fs/list error for %s: %s", path, e)
+        return jsonify({"status": "error", "message": "Could not list directory"}), 500
+
+    # Never offer a parent above the allowed roots.
+    parent_path = path.parent
+    parent = str(parent_path) if (path != parent_path and is_within(parent_path, roots)) else None
+    return jsonify({"path": str(path), "parent": parent, "entries": entries})
+
+
+# ── Scan control ──────────────────────────────────────────────────
+def _pid_is_scanner(pid: int) -> bool:
+    """True only if /proc/<pid>/cmdline still belongs to the scanner.
+
+    Guards against PID reuse: a recycled PID must not be mistaken for a running
+    scan.
+    """
+    if not pid:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+    return any(b"scanner.py" in part for part in cmdline.split(b"\x00"))
 
 
 @app.route("/api/scan/status")
@@ -481,13 +875,10 @@ def api_scan_status():
     db  = get_db()
     pid = db.get_scan_pid()
     if pid:
-        # Check if process is still running
-        import os
-        try:
-            os.kill(pid, 0)
+        if _pid_is_scanner(pid):
             return jsonify({"running": True, "pid": pid})
-        except OSError:
-            db.clear_scan_pid()
+        log.info("Clearing stale scan pid %d (not the scanner)", pid)
+        db.clear_scan_pid()
     return jsonify({"running": False})
 
 
@@ -495,7 +886,9 @@ def api_scan_status():
 def api_scan_stop():
     db  = get_db()
     pid = db.get_scan_pid()
-    if not pid:
+    if not pid or not _pid_is_scanner(pid):
+        if pid:
+            db.clear_scan_pid()
         return jsonify({"status": "not_running"})
     # Clear the PID — scanner checks between files and exits gracefully
     # Do NOT send SIGTERM; that kills the process mid-file and closes the log pipe
@@ -521,7 +914,7 @@ def api_remove_rejected():
         if not row or row["review_state"] != "rejected":
             continue
         # Delete sheet if exists
-        sheet = Path(cfg.OUTPUT_DIR) / (stem + ".jpg")
+        sheet = resolve_sheet(cfg.OUTPUT_DIR, row["path"])
         if sheet.exists():
             sheet.unlink()
         db.delete_file(row["path"])
@@ -553,12 +946,9 @@ def api_scan():
     # Check if already running
     existing_pid = db.get_scan_pid()
     if existing_pid:
-        import os
-        try:
-            os.kill(existing_pid, 0)
+        if _pid_is_scanner(existing_pid):
             return jsonify({"status": "already_running", "pid": existing_pid})
-        except OSError:
-            db.clear_scan_pid()
+        db.clear_scan_pid()
     proc = subprocess.Popen(
         [sys.executable, SCANNER, "--scan"],
         stdout=open(cfg.LOG_FILE, "a"),
@@ -569,6 +959,13 @@ def api_scan():
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+def _url_host(url: str) -> str:
+    try:
+        return urllib.parse.urlsplit(url).hostname or "?"
+    except ValueError:
+        return "?"
+
+
 def _api_get(url: str, api_key: str):
     req = urllib.request.Request(
         url, headers={"X-Api-Key": api_key, "Accept": "application/json"}
@@ -576,7 +973,8 @@ def _api_get(url: str, api_key: str):
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
-    except Exception:
+    except Exception as e:
+        log.warning("API GET failed: host=%s error=%s", _url_host(url), e)
         return None
 
 
@@ -588,7 +986,8 @@ def _api_post(url: str, api_key: str, body: dict = None):
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
-    except Exception:
+    except Exception as e:
+        log.warning("API POST failed: host=%s error=%s", _url_host(url), e)
         return None
 
 
@@ -599,7 +998,8 @@ def _api_delete(url: str, api_key: str):
     try:
         urllib.request.urlopen(req, timeout=10)
         return True
-    except Exception:
+    except Exception as e:
+        log.warning("API DELETE failed: host=%s error=%s", _url_host(url), e)
         return False
 
 
@@ -675,5 +1075,6 @@ def _blacklist_path(file_path: str, cfg: Config) -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     cfg = Config()
+    init_db()
     app.run(host=cfg.WEB_HOST, port=cfg.WEB_PORT,
             threaded=True, use_reloader=False)

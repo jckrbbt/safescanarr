@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Safe Scanarr — Sign in</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+
+  <div class="login-card">
+    <img src="/static/logo-sm.png" class="login-logo" alt="Safe Scanarr">
+    <h1 class="login-title">Safe Scanarr</h1>
+    <p class="login-hint">Enter your access token to continue.</p>
+
+    <form id="login-form" autocomplete="off">
+      <input type="password" id="login-token" class="input-full"
+             placeholder="Access token" autofocus>
+      <button type="submit" class="btn btn-primary login-submit" id="login-btn">Sign in</button>
+    </form>
+
+    <div id="login-msg" class="msg error" style="display:none"></div>
+    <p class="login-footnote">
+      The token is stored in <code>data/config.json</code> (mode 0600) or supplied
+      via the <code>SS_TOKEN</code> environment variable.
+      <span id="login-version"></span>
+    </p>
+  </div>
+
+  <script>
+    document.getElementById("login-version").textContent = "v{{ version }}";
+
+    document.getElementById("login-form").addEventListener("submit", async function(e) {
+      e.preventDefault();
+      var btn = document.getElementById("login-btn");
+      var msg = document.getElementById("login-msg");
+      var token = document.getElementById("login-token").value.trim();
+      if (!token) return;
+      btn.disabled = true; btn.textContent = "Signing in…";
+      msg.style.display = "none";
+      try {
+        var res  = await fetch("/login", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({token: token})
+        });
+        var data = await res.json().catch(function() { return {}; });
+        if (res.ok) {
+          window.location.href = "/";
+          return;
+        }
+        msg.textContent = data.message || "Sign in failed";
+        msg.style.display = "block";
+      } catch (err) {
+        msg.textContent = "Sign in failed";
+        msg.style.display = "block";
+      }
+      btn.disabled = false; btn.textContent = "Sign in";
+    });
+  </script>
+</body>
+</html>

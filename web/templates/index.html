@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Safe Scanarr</title>
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -19,6 +20,7 @@
     </div>
     <div class="topbar-right">
       <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ Run Scan Now</button>
+      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out">⏻ Sign out</button>
       <div class="topbar-search">
         <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearch()">
         <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display:none" title="Clear search">✕</button>
@@ -326,6 +328,15 @@
             <label style="margin-top:12px">Auto-reject after (days)</label>
             <p class="hint">Quarantined items older than this are automatically rejected. Set to 0 to disable auto-reject.</p>
             <input type="number" id="cfg-quarantine-days" class="input-short" min="0">
+
+            <div class="toggle-row" style="margin-top:16px">
+              <label class="toggle-label">Permanently delete on reject</label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="cfg-delete-on-reject">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <p class="hint" style="color:var(--warn)">Off by default. When off, rejecting an item moves the video to quarantine instead of deleting it. Turn this on only if you want rejects deleted immediately.</p>
           </section>
 
           <section class="config-section">

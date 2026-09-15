@@ -18,6 +18,39 @@ TABS.forEach(function(t) {
   tabPage[t]    = 1;
 });
 
+// ── Auth / CSRF helpers ───────────────────────────────────────────
+var _deleteOnReject = false;   // set from /api/version
+
+function csrfToken() {
+  var m = document.querySelector('meta[name="csrf-token"]');
+  return m ? m.getAttribute("content") : "";
+}
+
+function redirectToLogin() {
+  window.location.href = "/login";
+}
+
+// Wrapper around fetch: attaches the CSRF header to state-changing requests and
+// bounces the browser back to /login when the session has expired.
+async function apiFetch(url, opts) {
+  opts = opts || {};
+  if (opts.method && opts.method !== "GET") {
+    opts.credentials = opts.credentials || "same-origin";
+    opts.headers = Object.assign({}, opts.headers || {}, {"X-CSRF-Token": csrfToken()});
+  }
+  var res = await window.fetch(url, opts);
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error("unauthenticated");
+  }
+  return res;
+}
+
+async function signOut() {
+  try { await apiFetch("/logout", {method: "POST", headers: {"X-CSRF-Token": csrfToken()}}); } catch(e) {}
+  redirectToLogin();
+}
+
 document.addEventListener("DOMContentLoaded", function() {
   loadVersion();
   loadStats();
@@ -77,16 +110,17 @@ function navigateTo(page) {
 // ── Version ───────────────────────────────────────────────────────
 async function loadVersion() {
   try {
-    var res = await fetch("/api/version");
+    var res = await apiFetch("/api/version");
     var d   = await res.json();
     document.getElementById("nav-version").textContent = "v" + d.version;
+    _deleteOnReject = !!d.delete_on_reject;
   } catch(e) {}
 }
 
 // ── Stats ─────────────────────────────────────────────────────────
 async function loadStats() {
   try {
-    var res   = await fetch("/api/stats");
+    var res   = await apiFetch("/api/stats");
     var stats = await res.json();
     TABS.forEach(function(t) {
       var badge = document.getElementById("badge-" + t);
@@ -104,7 +138,7 @@ async function loadPage(tab, resetPage) {
   var search = (document.getElementById("global-search") || {value:""}).value || "";
   var url    = "/api/sheets?state=" + tab + "&search=" + encodeURIComponent(search.toLowerCase());
   if (tab === "approved" && approvedSourceFilter) url += "&source=" + approvedSourceFilter;
-  var res = await fetch(url);
+  var res = await apiFetch(url);
   tabSheets[tab] = await res.json();
   selections[tab].clear();
   if (!window._stems) window._stems = {};
@@ -185,7 +219,7 @@ function renderTab(tab) {
     var confBadge = "";
     if (sheet.nsfw_confidence != null) {
       var pct = Math.round(sheet.nsfw_confidence * 100);
-      var tip = sheet.flag_reason ? sheet.flag_reason.replace(/"/g, "&quot;") : (pct === 0 ? "No risk detected" : "NSFW detected");
+      var tip = sheet.flag_reason ? escapeHtml(sheet.flag_reason) : (pct === 0 ? "No risk detected" : "NSFW detected");
       var badgeColor = isApproved ? "var(--text-dim)" : "";
       confBadge = '<span class="risk-badge' + (isApproved ? ' risk-badge-clean' : '') + '" title="' + tip + '">' + pct + '% risk</span>';
     }
@@ -212,7 +246,7 @@ function renderTab(tab) {
     }
 
     var nsfwOverlay = showNsfw ? '<div class="flagged-overlay">⚠ NSFW</div>' : "";
-    var srcPath = (sheet.source_path || "Unknown").replace(/"/g, "&quot;");
+    var srcPath = escapeHtml(sheet.source_path || "Unknown");
 
     card.innerHTML =
       '<div class="sheet-select">' +
@@ -324,8 +358,10 @@ async function singleAction(tab, action, idx) {
 function confirmSingle(tab, action, idx) {
   var stem = window._stems[tab][idx];
   showModal(
-    "Confirm Deletion",
-    "This will permanently delete the source video for \"" + stem + "\". This cannot be undone.",
+    _deleteOnReject ? "Confirm Deletion" : "Confirm Reject",
+    _deleteOnReject
+      ? "This will permanently delete the source video for \"" + stem + "\". This cannot be undone."
+      : "This will move the source video for \"" + stem + "\" to quarantine. You can still restore or delete it later.",
     async function() { closeModal(); await singleAction(tab, action, idx); }
   );
 }
@@ -343,8 +379,10 @@ function confirmBulkAction(tab, action) {
   var n = selections[tab].size;
   if (!n) return;
   showModal(
-    "Delete " + n + " item" + (n > 1 ? "s" : "") + "?",
-    "This will permanently delete " + n + " source video file" + (n > 1 ? "s" : "") + ". This cannot be undone.",
+    _deleteOnReject ? "Delete " + n + " item" + (n > 1 ? "s" : "") + "?" : "Reject " + n + " item" + (n > 1 ? "s" : "") + "?",
+    _deleteOnReject
+      ? "This will permanently delete " + n + " source video file" + (n > 1 ? "s" : "") + ". This cannot be undone."
+      : "This will move " + n + " source video file" + (n > 1 ? "s" : "") + " to quarantine. Nothing is deleted.",
     async function() { closeModal(); await bulkAction(tab, action); }
   );
 }
@@ -361,14 +399,14 @@ async function performAction(action, stems) {
   if (!url) return;
 
   if (action === "quarantine-single") {
-    var res  = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stem:stems[0]})});
+    var res  = await apiFetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stem:stems[0]})});
     var data = await res.json();
     toast(res.ok ? "Moved to quarantine ⚠" : "Error: " + (data.message || "unknown"), !res.ok);
     return;
   }
   if (action === "requeue") {
     for (var i = 0; i < stems.length; i++) {
-      var res2 = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stem:stems[i]})});
+      var res2 = await apiFetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stem:stems[i]})});
       var d2   = await res2.json();
       if (!res2.ok) { toast("Error: " + (d2.message || "unknown"), true); return; }
     }
@@ -376,13 +414,13 @@ async function performAction(action, stems) {
     return;
   }
   if (action === "remove-rejected") {
-    var res3  = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stems:stems})});
+    var res3  = await apiFetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stems:stems})});
     var data3 = await res3.json();
     var cnt   = (data3.removed || []).length;
     toast(res3.ok ? "Removed " + cnt + " entr" + (cnt > 1 ? "ies" : "y") + " ✓" : "Error removing", !res3.ok);
     return;
   }
-  var res4  = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stems:stems})});
+  var res4  = await apiFetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stems:stems})});
   var data4 = await res4.json();
   var labels = {approve:"Approved ✓", reject:"Rejected ✗"};
   toast(res4.ok ? (labels[action] || "Done") + " (" + stems.length + ")" : "Error: " + (data4.message || "unknown"), !res4.ok);
@@ -391,7 +429,7 @@ async function performAction(action, stems) {
 // ── Scan ──────────────────────────────────────────────────────────
 async function checkScanStatus() {
   try {
-    var res  = await fetch("/api/scan/status");
+    var res  = await apiFetch("/api/scan/status");
     var data = await res.json();
     setScanRunning(data.running);
   } catch(e) {}
@@ -412,10 +450,10 @@ function setScanRunning(running) {
 
 async function toggleScan() {
   if (scanRunning) {
-    var res = await fetch("/api/scan/stop", {method:"POST"});
+    var res = await apiFetch("/api/scan/stop", {method:"POST"});
     if (res.ok) { setScanRunning(false); toast("Scan stopping — current file will finish first"); }
   } else {
-    var res2 = await fetch("/api/scan", {method:"POST"});
+    var res2 = await apiFetch("/api/scan", {method:"POST"});
     if (res2.ok) { setScanRunning(true); toast("Scan started — check Logs for progress"); }
   }
 }
@@ -501,7 +539,7 @@ async function onGlobalSearch() {
 
   for (var i = 0; i < TABS.length; i++) {
     var tab = TABS[i];
-    var res = await fetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(q.toLowerCase()));
+    var res = await apiFetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(q.toLowerCase()));
     var sheets = await res.json();
     tabSheets[tab] = sheets;
     if (sheets.length > 0) sections.push({tab:tab, label:tabLabels[tab], sheets:sheets});
@@ -517,7 +555,7 @@ async function onGlobalSearch() {
   sections.forEach(function(sec) {
     var section = document.createElement("div");
     section.className = "search-section";
-    section.innerHTML = '<div class="search-section-title">' + sec.label + '<span class="nav-badge">' + sec.sheets.length + '</span></div>';
+    section.innerHTML = '<div class="search-section-title">' + escapeHtml(sec.label) + '<span class="nav-badge">' + sec.sheets.length + '</span></div>';
 
     var grid = document.createElement("div");
     grid.className = "sheets-grid";
@@ -546,7 +584,7 @@ async function onGlobalSearch() {
           : '<img class="sheet-img" src="' + src2 + '" alt="" loading="lazy">';
       }
 
-      var srcPath2  = (sheet.source_path || "Unknown").replace(/"/g, "&quot;");
+      var srcPath2  = escapeHtml(sheet.source_path || "Unknown");
       var card2 = document.createElement("div");
       card2.className = "sheet-card" + (showNsfw ? " flagged" : "");
       card2.dataset.stem = sheet.stem;
@@ -597,7 +635,7 @@ async function loadStatsPage() {
   if (!container) return;
   container.innerHTML = '<p style="color:var(--text-dim);padding:20px 0">Loading...</p>';
 
-  var res   = await fetch("/api/stats/full");
+  var res   = await apiFetch("/api/stats/full");
   var stats = await res.json();
 
   var by     = stats.by_state   || {};
@@ -643,7 +681,7 @@ async function loadStatsPage() {
 
 // ── Config ────────────────────────────────────────────────────────
 async function loadConfig() {
-  var res = await fetch("/api/config");
+  var res   = await apiFetch("/api/config");
   var cfg = await res.json();
   // Set profile radio
   var profile = cfg.detection_profile || "balanced";
@@ -661,12 +699,17 @@ async function loadConfig() {
   document.getElementById("cfg-scan-schedule").value        = cfg.scan_schedule       || "daily";
   document.getElementById("cfg-quarantine-dir").value       = cfg.quarantine_dir      || "";
   document.getElementById("cfg-quarantine-days").value      = cfg.quarantine_auto_reject_days != null ? cfg.quarantine_auto_reject_days : 0;
+  var dor = document.getElementById("cfg-delete-on-reject");
+  if (dor) dor.checked = !!cfg.delete_on_reject;
   document.getElementById("cfg-polling-enabled").checked    = !!cfg.polling_enabled;
   document.getElementById("cfg-poll-interval").value        = cfg.poll_interval_seconds || 600;
   document.getElementById("cfg-sonarr-url").value           = cfg.sonarr_url          || "";
-  document.getElementById("cfg-sonarr-key").value           = cfg.sonarr_api_key      || "";
   document.getElementById("cfg-radarr-url").value           = cfg.radarr_url          || "";
-  document.getElementById("cfg-radarr-key").value           = cfg.radarr_api_key      || "";
+  // API keys are never sent to the browser — only whether one is configured.
+  window._sonarrKeySet = !!cfg.sonarr_api_key_set;
+  window._radarrKeySet = !!cfg.radarr_api_key_set;
+  setKeyField("cfg-sonarr-key", window._sonarrKeySet);
+  setKeyField("cfg-radarr-key", window._radarrKeySet);
   document.getElementById("cfg-webhook-url").value          = cfg.webhook_url         || "";
   document.getElementById("cfg-webhook-review").checked     = !!cfg.webhook_on_review;
   document.getElementById("cfg-webhook-quarantine").checked = !!cfg.webhook_on_quarantine;
@@ -711,12 +754,11 @@ async function saveConfig() {
     scan_schedule:               document.getElementById("cfg-scan-schedule").value,
     quarantine_dir:              document.getElementById("cfg-quarantine-dir").value.trim(),
     quarantine_auto_reject_days: parseInt(document.getElementById("cfg-quarantine-days").value),
+    delete_on_reject:            !!((document.getElementById("cfg-delete-on-reject") || {}).checked),
     polling_enabled:             document.getElementById("cfg-polling-enabled").checked,
     poll_interval_seconds:       parseInt(document.getElementById("cfg-poll-interval").value),
     sonarr_url:                  document.getElementById("cfg-sonarr-url").value.trim(),
-    sonarr_api_key:              document.getElementById("cfg-sonarr-key").value.trim(),
     radarr_url:                  document.getElementById("cfg-radarr-url").value.trim(),
-    radarr_api_key:              document.getElementById("cfg-radarr-key").value.trim(),
     webhook_url:                 document.getElementById("cfg-webhook-url").value.trim(),
     webhook_on_review:           document.getElementById("cfg-webhook-review").checked,
     webhook_on_quarantine:       document.getElementById("cfg-webhook-quarantine").checked,
@@ -725,9 +767,21 @@ async function saveConfig() {
     vcs_grid:                    document.getElementById("cfg-vcs-grid").value.trim(),
     vcsi_timeout_seconds:        parseInt(document.getElementById("cfg-vcsi-timeout").value),
   };
-  var res = await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+  // Only send API keys when the user actually typed one; blank means "unchanged".
+  var sKey = document.getElementById("cfg-sonarr-key").value.trim();
+  var rKey = document.getElementById("cfg-radarr-key").value.trim();
+  if (sKey) payload.sonarr_api_key = sKey;
+  if (rKey) payload.radarr_api_key = rKey;
+  var res = await apiFetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
   var msg = document.getElementById("config-msg");
-  if (res.ok) { msg.className = "msg success"; msg.textContent = "✓ Configuration saved."; }
+  if (res.ok) {
+    msg.className = "msg success"; msg.textContent = "✓ Configuration saved.";
+    window._sonarrKeySet = window._sonarrKeySet || !!sKey;
+    window._radarrKeySet = window._radarrKeySet || !!rKey;
+    setKeyField("cfg-sonarr-key", window._sonarrKeySet);
+    setKeyField("cfg-radarr-key", window._radarrKeySet);
+    checkArrKeys();
+  }
   else {
     var d = await res.json().catch(function() { return {}; });
     msg.className = "msg error"; msg.textContent = "✗ " + (d.message || "Failed to save.");
@@ -802,7 +856,7 @@ async function loadFsPath(path) {
   var url = "/api/fs/list" + (path ? "?path=" + encodeURIComponent(path) : "");
   var res, data;
   try {
-    res  = await fetch(url);
+    res  = await apiFetch(url);
     data = await res.json();
   } catch(e) {
     return;
@@ -819,20 +873,28 @@ async function loadFsPath(path) {
 
   var html = "";
   if (data.parent && data.parent !== data.path) {
-    html += '<div class="folder-browser-item up" onclick=\'loadFsPath(' + JSON.stringify(data.parent) + ')\'>⬆ ..</div>';
+    html += '<div class="folder-browser-item up" onclick=\'loadFsPath(' + escapeHtml(JSON.stringify(data.parent)) + ')\'>⬆ ..</div>';
   }
   if (!data.entries || data.entries.length === 0) {
     html += '<div class="folder-browser-empty">No subdirectories. You can still select this folder.</div>';
   } else {
     html += data.entries.map(function(e) {
-      return '<div class="folder-browser-item" onclick=\'loadFsPath(' + JSON.stringify(e.path) + ')\'>📁 ' + escapeHtml(e.name) + '</div>';
+      return '<div class="folder-browser-item" onclick=\'loadFsPath(' + escapeHtml(JSON.stringify(e.path)) + ')\'>📁 ' + escapeHtml(e.name) + '</div>';
     }).join("");
   }
   listEl.innerHTML = html;
 }
 
+function setKeyField(id, isSet) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.value = "";
+  el.placeholder = isSet ? "•••••••• configured" : "Not set";
+}
+
 function checkArrKeys() {
-  var hasKeys = (document.getElementById("cfg-sonarr-key") || {value:""}).value.trim().length > 0 ||
+  var hasKeys = !!(window._sonarrKeySet || window._radarrKeySet) ||
+                (document.getElementById("cfg-sonarr-key") || {value:""}).value.trim().length > 0 ||
                 (document.getElementById("cfg-radarr-key") || {value:""}).value.trim().length > 0;
   var toggle  = document.getElementById("cfg-polling-enabled");
   var hint    = document.getElementById("polling-no-keys-hint");
@@ -846,7 +908,7 @@ async function testConnection(service) {
   var result = document.getElementById("test-" + service + "-result");
   btn.textContent = "…"; btn.disabled = true;
   await saveConfig();
-  var res  = await fetch("/api/config/test-" + service, {method:"POST"});
+  var res  = await apiFetch("/api/config/test-" + service, {method:"POST"});
   var data = await res.json();
   result.className   = res.ok ? "test-result success" : "test-result error";
   result.textContent = res.ok ? "✓ Connected — " + service + " v" + data.version : "✗ " + (data.message || "Connection failed");
@@ -858,7 +920,7 @@ async function testWebhook() {
   var result = document.getElementById("test-webhook-result");
   btn.textContent = "…"; btn.disabled = true;
   await saveConfig();
-  var res  = await fetch("/api/config/test-webhook", {method:"POST"});
+  var res  = await apiFetch("/api/config/test-webhook", {method:"POST"});
   var data = await res.json();
   result.className   = res.ok ? "test-result success" : "test-result error";
   result.textContent = res.ok ? "✓ Webhook delivered" : "✗ " + (data.message || "Failed");
@@ -868,7 +930,7 @@ async function testWebhook() {
 async function cleanDatabase() {
   var result = document.getElementById("clean-db-result");
   result.className = "test-result"; result.textContent = "Cleaning…";
-  var res  = await fetch("/api/db/clean", {method:"POST"});
+  var res  = await apiFetch("/api/db/clean", {method:"POST"});
   var data = await res.json();
   result.className   = res.ok ? "test-result success" : "test-result error";
   if (res.ok) {
@@ -891,7 +953,7 @@ async function restoreDatabase(file) {
   var fd = new FormData();
   fd.append("file", file);
   try {
-    var res = await fetch("/api/backup/restore/db", {method:"POST", body: fd});
+    var res = await apiFetch("/api/backup/restore/db", {method:"POST", body: fd});
     var d   = await res.json();
     if (res.ok) {
       result.className   = "test-result success";
@@ -915,7 +977,7 @@ async function restoreVcsArchive(file) {
   var fd = new FormData();
   fd.append("file", file);
   try {
-    var res = await fetch("/api/backup/restore/vcs", {method:"POST", body: fd});
+    var res = await apiFetch("/api/backup/restore/vcs", {method:"POST", body: fd});
     var d   = await res.json();
     if (res.ok) {
       result.className   = "test-result success";
@@ -934,7 +996,7 @@ async function restoreVcsArchive(file) {
 async function loadLogs() {
   var lines = document.getElementById("log-lines").value;
   var level = document.getElementById("log-level").value;
-  var res   = await fetch("/api/logs?lines=" + lines + "&level=" + level);
+  var res   = await apiFetch("/api/logs?lines=" + lines + "&level=" + level);
   var data  = await res.json();
   var out   = document.getElementById("log-output");
   out.innerHTML = data.lines.map(function(line) {
@@ -1074,8 +1136,10 @@ async function lightboxAction(action) {
   if (action === "reject") {
     // Confirm then advance
     showModal(
-      "Confirm Deletion",
-      "This will permanently delete the source video. This cannot be undone.",
+      _deleteOnReject ? "Confirm Deletion" : "Confirm Reject",
+      _deleteOnReject
+        ? "This will permanently delete the source video. This cannot be undone."
+        : "This will move the source video to quarantine. Nothing is deleted.",
       async function() {
         closeModal();
         closeLightbox();
