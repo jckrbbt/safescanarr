@@ -106,9 +106,10 @@ def _throttle_check(ip: str) -> bool:
             return True
         if now < rec["until"]:
             return False
-        # Expired lockout: reset
-        rec["fails"] = 0
-        rec["until"] = 0
+        # Lockout expired; reset counters so future failures start fresh
+        if rec["until"] > 0:
+            rec["fails"] = 0
+            rec["until"] = 0
         return True
 
 
