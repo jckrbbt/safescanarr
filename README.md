@@ -54,8 +54,8 @@ Open **http://yourserver:8666** and complete the first-run setup to choose a pas
 
 Safe Scanarr supports two authentication methods, chosen during first-run setup:
 
-* **Password** — recommended for browser use. The password is hashed with `pbkdf2:sha256` and stored in `data/config.json`. It cannot be recovered, only reset.
-* **Security token** — recommended for scripts, API clients, and Docker. The token is generated once and shown once during setup. Use it via `X-Auth-Token` or `Authorization: Bearer <token>`.
+* **Password**: recommended for browser use. The password is hashed with `pbkdf2:sha256` and stored in `data/config.json`. It cannot be recovered, only reset.
+* **Security token**: recommended for scripts, API clients, and Docker. During setup the token is generated in your browser (never sent from the server) and displayed once with a copy button; it is stored exactly as shown, so what you save is what works. Use it via `X-Auth-Token: <token>` or `Authorization: Bearer <token>` on API calls.
 
 ### Environment overrides
 
@@ -69,10 +69,15 @@ Safe Scanarr supports two authentication methods, chosen during first-run setup:
 If you lose access, run as the service user:
 
 ```bash
-python3 -m web.authtool reset       # return to first-run setup
-python3 -m web.authtool set-password
-python3 -m web.authtool set-token --show
+python3 -m web.authtool status           # show current auth method and state (no secrets)
+python3 -m web.authtool reset            # return to first-run setup
+python3 -m web.authtool set-password     # prompts for a new password
+python3 -m web.authtool set-token --show # set a new token and print it
 ```
+
+### Login throttling
+
+Failed login and setup attempts are throttled per IP address: 10 failures trigger a lockout with exponential backoff (1 minute doubling, capped at 1 hour). The lockout is keyed on the connecting IP as the server sees it. If multiple users access Safe Scanarr behind the same reverse proxy or NAT gateway, they all share one IP, so one person's failed attempts can lock everyone else out. Run Safe Scanarr directly on your LAN, or give each site a dedicated proxy, if that is a concern.
 
 **Note:** upgrading to 1.0.5 introduces an independent `session_secret`, which invalidates existing sessions once. You will be asked to sign in again.
 

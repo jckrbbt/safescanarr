@@ -17,12 +17,15 @@
 - Sticky config save bar with dirty-state tracking
 
 ### Changed
-- Session secret is independent of auth token — existing sessions are invalidated once on upgrade
+- Session secret is independent of auth token, so existing sessions are invalidated once on upgrade
 - Default web port changed from 8686 to 8666
 - Config API no longer reads or writes `auth_token`, `auth_password_hash`, or `session_secret`
 - README expanded with Authentication and recovery sections
 
 ### Security
+- First-run setup is race-safe: the configuration check and write are atomic, so concurrent `/setup` requests cannot each claim the credential (only the first wins; the rest get 409)
+- A pre-verify rate limit (~1 request/second per IP) blunts CPU exhaustion via repeated password hashing before the expensive verify runs
+- Token-mode setup stores exactly the token generated in the browser and shown to the user
 - Config API strips auth/session secrets
 - Login throttling defends against brute-force attempts
 - Cross-origin and CSRF guards remain enforced for all state-changing routes
