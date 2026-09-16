@@ -58,6 +58,14 @@
   /* Focus ring */
   --ring: 0 0 0 2px rgba(108,140,255,.5);
 
+  /* Layout / safe-area / touch */
+  --topbar-h: 54px;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --tap: 44px;
+
   /* Breakpoints — CSS custom properties cannot be used in @media conditions */
   --bp-md: 900px;
   --bp-sm: 600px;
@@ -73,10 +81,14 @@ body {
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: var(--font-md);
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  overscroll-behavior-y: none;
 }
+
+* { -webkit-tap-highlight-color: transparent; }
 
 /* ── Focus-visible ring ───────────────────────────────────────── */
 button:focus-visible,
@@ -112,7 +124,8 @@ textarea:focus-visible,
   backdrop-filter: blur(14px) saturate(140%);
   border-bottom: 1px solid var(--border);
   padding: 0 var(--space-4);
-  height: 54px;
+  height: calc(var(--topbar-h) + var(--safe-t));
+  padding-top: var(--safe-t);
   z-index: 100;
   flex-shrink: 0;
   box-shadow: var(--shadow-1);
@@ -194,7 +207,8 @@ textarea:focus-visible,
 .layout {
   display: flex;
   flex: 1;
-  height: calc(100vh - 54px);
+  height: calc(100vh - var(--topbar-h));
+  height: calc(100dvh - var(--topbar-h));
   overflow: hidden;
   position: relative;
 }
@@ -302,7 +316,7 @@ textarea:focus-visible,
   .sidebar {
     position: fixed;
     left: 0;
-    top: 54px;
+    top: calc(var(--topbar-h) + var(--safe-t));
     bottom: 0;
     z-index: 200;
     width: 200px;
@@ -322,7 +336,7 @@ textarea:focus-visible,
   .sidebar-backdrop {
     display: none;
     position: fixed;
-    inset: 54px 0 0 0;
+    inset: calc(var(--topbar-h) + var(--safe-t)) 0 0 0;
     background: rgba(0,0,0,.5);
     z-index: 199;
   }
@@ -334,7 +348,10 @@ textarea:focus-visible,
   flex: 1;
   overflow-y: auto;
   padding: var(--space-5);
+  padding-left: max(var(--space-5), var(--safe-l));
+  padding-right: max(var(--space-5), var(--safe-r));
   min-width: 0;
+  overscroll-behavior: contain;
 }
 
 .page { display: none; }
@@ -445,6 +462,7 @@ textarea:focus-visible,
   display: block;
   cursor: pointer;
   background: var(--bg3);
+  touch-action: manipulation;
 }
 
 .sheet-info {
@@ -848,6 +866,7 @@ textarea.input-full { resize: vertical; }
   background: var(--bg2);
   border-top: 1px solid var(--border);
   padding: var(--space-3) var(--space-4);
+  padding-bottom: calc(var(--space-3) + var(--safe-b));
   display: flex;
   align-items: center;
   justify-content: space-between;
