@@ -44,7 +44,37 @@ Edit `docker-compose.yml` to mount your media folders, then:
 docker compose up -d --build
 ```
 
-Open **http://yourserver:8666** and configure everything from the Config page.
+Open **http://yourserver:8666** and complete the first-run setup to choose a password or token.
+
+> **Upgrade note for 1.0.5:** the default web port was changed from 8686 to 8666. If you are running bare-metal without `WEB_PORT` set, update your bookmarks.
+
+---
+
+## Authentication
+
+Safe Scanarr supports two authentication methods, chosen during first-run setup:
+
+* **Password** — recommended for browser use. The password is hashed with `pbkdf2:sha256` and stored in `data/config.json`. It cannot be recovered, only reset.
+* **Security token** — recommended for scripts, API clients, and Docker. The token is generated once and shown once during setup. Use it via `X-Auth-Token` or `Authorization: Bearer <token>`.
+
+### Environment overrides
+
+| Variable | Description |
+|---|---|
+| `SS_TOKEN` | Shared token; forces token mode and overrides any stored token |
+| `SS_PASSWORD_HASH` | Pre-set password hash for declarative deployments |
+
+### Recovery
+
+If you lose access, run as the service user:
+
+```bash
+python3 -m web.authtool reset       # return to first-run setup
+python3 -m web.authtool set-password
+python3 -m web.authtool set-token --show
+```
+
+**Note:** upgrading to 1.0.5 introduces an independent `session_secret`, which invalidates existing sessions once. You will be asked to sign in again.
 
 ---
 

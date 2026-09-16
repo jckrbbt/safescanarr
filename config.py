@@ -61,14 +61,18 @@ _DEFAULTS = {
     # VCS
     "vcs_grid":                "4x4",
     "vcsi_timeout_seconds":    300,
-    # Web UI auth (generated on first run if unset; SS_TOKEN env overrides)
+    # Web UI auth (SS_TOKEN env overrides; SS_PASSWORD_HASH declarative override)
     "auth_token":              "",
+    "auth_password_hash":      "",
+    "auth_method":             "",
+    "session_secret":          "",
 }
 
 # Env vars that override the corresponding config key for secrets.
 _ENV_SECRET_OVERRIDES = (
     ("sonarr_api_key", "SONARR_API_KEY"),
     ("radarr_api_key", "RADARR_API_KEY"),
+    ("auth_password_hash", "SS_PASSWORD_HASH"),
 )
 
 
@@ -155,6 +159,9 @@ def _load() -> dict:
         "vcs_quality":           80,
         "vcsi_timeout_seconds":  int(os.environ.get("VCSI_TIMEOUT_SECONDS", 300)),
         "auth_token":            "",
+        "auth_password_hash":    "",
+        "auth_method":             "",
+        "session_secret":          "",
     }
     save(cfg)
     return _apply_env_secrets(cfg)

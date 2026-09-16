@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-safescanarr/web/server.py v0.7
+safescanarr/web/server.py v1.0.5
 
 Auth model
 ----------
-Every route except ``/static/*``, ``/login`` and ``/health`` requires a single
-shared token:
+Every route except ``/static/*``, ``/login``, ``/setup``, and ``/health``
+requires authentication. Two modes are supported:
 
-  * browsers: POST the token to ``/login`` once, which sets a session cookie
-  * API clients: send ``X-Auth-Token: <token>`` (or ``Authorization: Bearer``)
+  * token mode:   shared token via session cookie (POST /login) or
+                  ``X-Auth-Token`` / ``Authorization: Bearer ***``
+  * password mode: password login via session cookie
 
 All state-changing requests are CSRF-protected: same-origin is enforced via
-Origin/Referer, and either the session CSRF token (header ``X-CSRF-Token``) or
-a valid ``X-Auth-Token`` header must be present.
+Origin/Referer, and the session CSRF token (header ``X-CSRF-Token``) must be
+present. Token-mode clients may also use a valid token header as CSRF proof.
 """
 
 import datetime
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -61,11 +63,79 @@ MAX_ZIP_UNCOMPRESSED  = 2 * 1024 * 1024 * 1024   # total uncompressed bytes cap
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.secret_key = hashlib.sha256(
-    ("safescanarr-session:" + (auth.token() or "unset")).encode()
-).hexdigest()
 
-PUBLIC_PATHS = {"/login", "/health"}
+
+# ── Session secret (independent of auth token) ────────────────────
+def _init_session_secret() -> None:
+    """Generate/persist a session_secret and set app.secret_key."""
+    secret = None
+    try:
+        cfg = config_module.raw()
+        secret = cfg.get("session_secret", "")
+        if not secret:
+            secret = os.environ.get("SS_SESSION_SECRET", "")
+        if not secret:
+            secret = __import__("secrets").token_urlsafe(32)
+            cfg["session_secret"] = secret
+            config_module.save(cfg)
+            log.warning(
+                "Generated new session_secret and persisted it to config.json (0600). "
+                "Existing sessions will be invalidated once on upgrade to 1.0.5."
+            )
+        app.secret_key = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    except Exception as e:  # pragma: no cover - read-only fallback
+        log.error("Could not persist session_secret: %s. Using deterministic fallback.", e)
+        app.secret_key = hashlib.sha256(b"safescanarr-session-fallback").hexdigest()
+
+
+_init_session_secret()
+
+PUBLIC_PATHS = {"/login", "/setup", "/health"}
+
+# ── Login throttling (per-IP in-memory) ───────────────────────────
+_throttle_lock = threading.Lock()
+_throttle: dict = {}  # ip -> {"fails": int, "until": float}
+
+
+def _throttle_check(ip: str) -> bool:
+    """Return True if the request is allowed, False if locked out."""
+    now = time.time()
+    with _throttle_lock:
+        rec = _throttle.get(ip)
+        if not rec:
+            return True
+        if now < rec["until"]:
+            return False
+        # Expired lockout: reset
+        rec["fails"] = 0
+        rec["until"] = 0
+        return True
+
+
+def _throttle_record(ip: str, *, success: bool) -> None:
+    with _throttle_lock:
+        rec = _throttle.get(ip)
+        if not rec:
+            rec = {"fails": 0, "until": 0}
+            _throttle[ip] = rec
+        if success:
+            rec["fails"] = 0
+            rec["until"] = 0
+            return
+        rec["fails"] += 1
+        if rec["fails"] >= 10:
+            # Exponential backoff starting at 60s, capped at 3600s
+            lockout = min(60 * (2 ** (rec["fails"] - 10)), 3600)
+            rec["until"] = time.time() + lockout
+            log.warning("Login throttled for %s after %d failures (lockout %ds)", ip, rec["fails"], lockout)
+
+
+def _throttle_remaining(ip: str) -> float:
+    with _throttle_lock:
+        rec = _throttle.get(ip)
+        if not rec:
+            return 0.0
+        return max(0.0, rec["until"] - time.time())
 
 
 # ── Database (initialised once per process, not per request) ──────
@@ -134,9 +204,10 @@ def _ensure_csrf() -> str:
 
 
 def _csrf_ok() -> bool:
-    # A valid auth token in a custom header cannot be forged by a cross-site
-    # request (custom headers require a CORS preflight), so it also proves intent.
-    if auth.check(_supplied_token()):
+    # A valid token header in token mode also proves intent (custom headers
+    # require a CORS preflight). In password mode the session CSRF path is
+    # the only proof.
+    if auth.method() == "token" and auth.verify(_supplied_token()):
         return True
     expected = session.get("csrf")
     if not expected:
@@ -159,16 +230,19 @@ def _require_auth():
     if path.startswith("/static/") or path in PUBLIC_PATHS:
         return None
 
-    token = auth.token()
-    if not token:
-        # Fail closed — no token could be resolved.
+    if not auth.is_configured():
         if path.startswith("/api/"):
-            return jsonify({"status": "error", "message": "Authentication unavailable"}), 503
-        return "Authentication unavailable", 503
+            return jsonify({"status": "error", "message": "Setup required"}), 503
+        if path != "/setup":
+            return redirect("/setup")
+        # /setup itself falls through (but it is in PUBLIC_PATHS, so we never get here)
+        return None
 
     if not session.get("authed"):
+        # Token-mode clients may authenticate via header for API calls, but
+        # HTML pages still require a session cookie (after /login).
         supplied = _supplied_token()
-        if supplied and auth.check(supplied):
+        if supplied and auth.method() == "token" and auth.verify(supplied):
             session.clear()
             session["authed"] = True
         else:
@@ -190,27 +264,88 @@ def _too_large(_e):
     return jsonify({"status": "error", "message": "Upload too large"}), 413
 
 
+# ── Setup (first-run) ──────────────────────────────────────────────
+@app.route("/setup", methods=["GET", "POST"])
+def setup_route():
+    if auth.is_configured():
+        if request.method == "GET":
+            return redirect("/login")
+        return jsonify({"status": "error", "message": "Already configured"}), 409
+
+    if request.method == "GET":
+        return render_template("setup.html", version=Config.version())
+
+    # POST
+    if not _origin_ok():
+        return jsonify({"status": "error", "message": "Cross-origin request rejected"}), 403
+
+    ip = request.remote_addr or "unknown"
+    if not _throttle_check(ip):
+        return jsonify({"status": "error", "message": "Too many attempts; try again later."}), 429
+
+    data = request.get_json(silent=True) or {}
+    method = (data.get("method") or "").strip().lower()
+
+    # Re-check is_configured under the config write lock path (config_module.save
+    # is atomic and serialised by the GIL in practice, but re-checking here
+    # prevents races from concurrent /setup requests).
+    try:
+        if auth.is_configured():
+            return jsonify({"status": "error", "message": "Already configured"}), 409
+
+        if method == "password":
+            password = (data.get("password") or "").strip()
+            confirm = (data.get("password_confirm") or "").strip()
+            try:
+                auth.configure_password(password, confirm)
+            except ValueError as e:
+                _throttle_record(ip, success=False)
+                return jsonify({"status": "error", "message": str(e)}), 400
+        elif method == "token":
+            generated = auth.configure_token()
+        else:
+            return jsonify({"status": "error", "message": "Invalid method"}), 400
+
+        session.clear()
+        session["authed"] = True
+        session["csrf"] = os.urandom(24).hex()
+        log.info("First-run setup completed via %s method from %s", method, ip)
+        return jsonify({"status": "ok", "token": generated if method == "token" else None,
+                        "csrf_token": session["csrf"]})
+    except Exception as e:
+        log.exception("Setup failed")
+        return jsonify({"status": "error", "message": "Setup failed"}), 500
+
+
 # ── Login ─────────────────────────────────────────────────────────
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
         if session.get("authed"):
             return redirect("/")
-        return render_template("login.html", version=Config.version())
+        return render_template("login.html", version=Config.version(),
+                               auth_method=auth.method())
 
     if not _origin_ok():
         return jsonify({"status": "error", "message": "Cross-origin request rejected"}), 403
 
-    body = request.get_json(silent=True) or request.form or {}
-    supplied = str(body.get("token", "")).strip()
-    if not auth.check(supplied):
-        log.warning("Failed login attempt from %s", request.remote_addr)
-        return jsonify({"status": "error", "message": "Invalid token"}), 401
+    ip = request.remote_addr or "unknown"
+    if not _throttle_check(ip):
+        return jsonify({"status": "error", "message": "Too many attempts; try again later."}), 429
 
+    body = request.get_json(silent=True) or request.form or {}
+    supplied = str(body.get("secret", "") or body.get("token", "") or body.get("password", "")).strip()
+
+    if not auth.verify(supplied):
+        _throttle_record(ip, success=False)
+        log.warning("Failed login attempt from %s", ip)
+        return jsonify({"status": "error", "message": "Invalid credentials"}), 401
+
+    _throttle_record(ip, success=True)
     session.clear()
     session["authed"] = True
     session["csrf"] = os.urandom(24).hex()
-    log.info("Login OK from %s", request.remote_addr)
+    log.info("Login OK from %s", ip)
     return jsonify({"status": "ok", "csrf_token": session["csrf"]})
 
 
@@ -238,6 +373,7 @@ def api_version():
     return jsonify({
         "version": Config.version(),
         "delete_on_reject": Config().DELETE_ON_REJECT,
+        "auth_method": auth.method(),
     })
 
 
@@ -532,7 +668,12 @@ def _build_config_update(data: dict):
 def api_config_get():
     """Return config with secrets masked (arr API keys reported as set/not-set)."""
     cfg = config_module.get()
-    cfg.pop("auth_token", None)                       # never expose the auth token
+    # Never expose auth secrets or the session secret
+    cfg.pop("auth_token", None)
+    cfg.pop("auth_password_hash", None)
+    cfg.pop("session_secret", None)
+    # webhook_url is reported as set/not-set only
+    cfg["webhook_url_set"] = bool(cfg.pop("webhook_url", ""))
     cfg["sonarr_api_key_set"] = bool(cfg.pop("sonarr_api_key", ""))
     cfg["radarr_api_key_set"] = bool(cfg.pop("radarr_api_key", ""))
     return jsonify(cfg)
@@ -543,6 +684,9 @@ def api_config_save():
     data = request.get_json(silent=True)
     if not data or not isinstance(data, dict):
         return jsonify({"status": "error", "message": "No JSON body"}), 400
+    # Security-critical: never accept auth/session secrets through this API.
+    for forbidden in ("auth_token", "auth_password_hash", "session_secret"):
+        data.pop(forbidden, None)
     try:
         clean, errors = _build_config_update(data)
         if errors:

@@ -16,5 +16,7 @@ services:
       # Bind inside the container so the published port stays reachable from the
       # LAN. The host default (127.0.0.1) deliberately does not expose the UI.
       - WEB_HOST=0.0.0.0
-      # Optional: manage the UI auth token via env instead of config.json
+      # On first run, open the web UI and complete setup to choose password or
+      # token auth. If you prefer to manage auth via env, uncomment and set one:
       # - SS_TOKEN=change-me
+      # - SS_PASSWORD_HASH=$2b$...  # use python3 -m web.authtool set-password

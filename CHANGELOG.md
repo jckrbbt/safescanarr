@@ -1,0 +1,28 @@
+# Safe Scanarr Changelog
+
+## 1.0.5
+
+### Added
+- First-run setup screen (`/setup`) with password or security token method
+- Method-aware auth module supporting password and token modes
+- Per-IP login throttling (10 failures → lockout with exponential backoff)
+- `session_secret` independent of auth token for Flask session integrity
+- `web/authtool.py` CLI: `status`, `reset`, `set-password`, `set-token --show`
+- UI loading, empty, and error state system
+- Global keyboard shortcuts (`/`, `1-4`, `Esc`, `?`)
+- Risk badge severity color scale (low / medium / high)
+- Focus-visible rings and `prefers-reduced-motion` support
+- Lightbox in-place updates, focus trap, close button, and neighbour preload
+- Sticky bulk-action bar and unified toolbar ordering
+- Sticky config save bar with dirty-state tracking
+
+### Changed
+- Session secret is independent of auth token — existing sessions are invalidated once on upgrade
+- Default web port changed from 8686 to 8666
+- Config API no longer reads or writes `auth_token`, `auth_password_hash`, or `session_secret`
+- README expanded with Authentication and recovery sections
+
+### Security
+- Config API strips auth/session secrets
+- Login throttling defends against brute-force attempts
+- Cross-origin and CSRF guards remain enforced for all state-changing routes

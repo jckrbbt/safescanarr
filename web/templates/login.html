@@ -12,38 +12,59 @@
   <div class="login-card">
     <img src="/static/logo-sm.png" class="login-logo" alt="Safe Scanarr">
     <h1 class="login-title">Safe Scanarr</h1>
-    <p class="login-hint">Enter your access token to continue.</p>
+    <p class="login-hint" id="login-hint">Enter your access token to continue.</p>
 
     <form id="login-form" autocomplete="off">
-      <input type="password" id="login-token" class="input-full"
-             placeholder="Access token" autofocus>
+      <div class="login-input-wrap">
+        <input type="password" id="login-token" class="input-full"
+               placeholder="Access token" autocomplete="current-password" autofocus>
+        <button type="button" id="toggle-secret" class="toggle-secret" title="Show/hide">👁</button>
+      </div>
       <button type="submit" class="btn btn-primary login-submit" id="login-btn">Sign in</button>
     </form>
 
-    <div id="login-msg" class="msg error" style="display:none"></div>
+    <div id="login-msg" class="msg error" role="status" aria-live="polite" style="display:none"></div>
     <p class="login-footnote">
-      The token is stored in <code>data/config.json</code> (mode 0600) or supplied
-      via the <code>SS_TOKEN</code> environment variable.
-      <span id="login-version"></span>
+      <span id="login-footnote-token">The token is stored in <code>data/config.json</code> (mode 0600) or supplied via the <code>SS_TOKEN</code> environment variable.</span>
+      <span id="login-footnote-password" style="display:none">Your password is stored as a hash in <code>data/config.json</code> (mode 0600). It cannot be recovered, only reset.</span>
+      <br>
+      <a href="https://github.com/jckrbbt/safescanarr#authentication" target="_blank" rel="noopener" class="login-help">Lost access?</a>
+      <span id="login-version" style="display:block; margin-top:6px"></span>
     </p>
   </div>
 
   <script>
+    var authMethod = {{ auth_method|tojson }} || "token";
     document.getElementById("login-version").textContent = "v{{ version }}";
+
+    var isPassword = authMethod === "password";
+    if (isPassword) {
+      document.getElementById("login-hint").textContent = "Enter your password to continue.";
+      document.getElementById("login-token").placeholder = "Password";
+      document.getElementById("login-footnote-token").style.display = "none";
+      document.getElementById("login-footnote-password").style.display = "inline";
+    }
+
+    document.getElementById("toggle-secret").addEventListener("click", function() {
+      var el = document.getElementById("login-token");
+      el.type = el.type === "password" ? "text" : "password";
+    });
 
     document.getElementById("login-form").addEventListener("submit", async function(e) {
       e.preventDefault();
       var btn = document.getElementById("login-btn");
       var msg = document.getElementById("login-msg");
-      var token = document.getElementById("login-token").value.trim();
-      if (!token) return;
+      var secret = document.getElementById("login-token").value.trim();
+      if (!secret) return;
       btn.disabled = true; btn.textContent = "Signing in…";
       msg.style.display = "none";
       try {
+        var payload = isPassword ? {password: secret} : {token: secret};
+        payload.secret = secret;  // server prefers 'secret'
         var res  = await fetch("/login", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({token: token})
+          body: JSON.stringify(payload)
         });
         var data = await res.json().catch(function() { return {}; });
         if (res.ok) {
@@ -51,10 +72,10 @@
           return;
         }
         msg.textContent = data.message || "Sign in failed";
-        msg.style.display = "block";
+        msg.className = "msg error"; msg.style.display = "block";
       } catch (err) {
         msg.textContent = "Sign in failed";
-        msg.style.display = "block";
+        msg.className = "msg error"; msg.style.display = "block";
       }
       btn.disabled = false; btn.textContent = "Sign in";
     });

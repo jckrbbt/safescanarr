@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Safe Scanarr — First-Run Setup</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+
+  <div class="login-card" style="max-width: 420px;">
+    <img src="/static/logo-sm.png" class="login-logo" alt="Safe Scanarr">
+    <h1 class="login-title">Welcome to Safe Scanarr</h1>
+    <p class="login-hint">Choose how you want to sign in.</p>
+
+    <form id="setup-form" autocomplete="off">
+      <div class="mode-options">
+        <label class="mode-option">
+          <input type="radio" name="method" value="password" checked>
+          <span class="mode-label">
+            <span class="mode-title">Password</span>
+            <span class="mode-desc">Recommended for browser use</span>
+          </span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="method" value="token">
+          <span class="mode-label">
+            <span class="mode-title">Security Token</span>
+            <span class="mode-desc">Recommended for scripts and Docker</span>
+          </span>
+        </label>
+      </div>
+
+      <div id="password-panel" class="setup-panel">
+        <label for="setup-password">Create a password</label>
+        <input type="password" id="setup-password" class="input-full" autocomplete="new-password"
+               placeholder="At least 10 characters" minlength="10">
+        <label for="setup-password-confirm" style="margin-top: 10px;">Confirm password</label>
+        <input type="password" id="setup-password-confirm" class="input-full" autocomplete="new-password"
+               placeholder="Re-enter password">
+        <ul class="password-hints">
+          <li id="hint-length">At least 10 characters</li>
+          <li id="hint-case">Both lower and upper case letters</li>
+          <li id="hint-number">At least one number or symbol</li>
+          <li id="hint-common">Not a common password</li>
+          <li id="hint-match">Passwords match</li>
+        </ul>
+      </div>
+
+      <div id="token-panel" class="setup-panel" style="display:none">
+        <p class="hint">A token will be generated and shown once. Save it somewhere safe.</p>
+        <button type="button" id="generate-token-btn" class="btn btn-secondary">Generate Token</button>
+        <div id="token-display-wrap" style="display:none; margin-top: 12px;">
+          <div class="token-display" id="token-display"></div>
+          <button type="button" id="copy-token-btn" class="btn btn-secondary btn-sm">Copy</button>
+          <label class="token-confirm">
+            <input type="checkbox" id="token-saved"> I have saved the token
+          </label>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary login-submit" id="setup-btn">Finish Setup</button>
+    </form>
+
+    <div id="setup-msg" class="msg error" style="display:none"></div>
+    <p class="login-footnote">
+      The configured credential is stored in <code>data/config.json</code> (mode 0600).
+      <span id="login-version"></span>
+    </p>
+  </div>
+
+  <script>
+    document.getElementById("login-version").textContent = "v{{ version }}";
+
+    var methodRadios = document.querySelectorAll('input[name="method"]');
+    var passwordPanel = document.getElementById("password-panel");
+    var tokenPanel = document.getElementById("token-panel");
+    var generatedToken = null;
+
+    function updatePanel() {
+      var method = document.querySelector('input[name="method"]:checked').value;
+      passwordPanel.style.display = method === "password" ? "block" : "none";
+      tokenPanel.style.display = method === "token" ? "block" : "none";
+    }
+
+    methodRadios.forEach(function(r) { r.addEventListener("change", updatePanel); });
+
+    var pwd = document.getElementById("setup-password");
+    var pwdConfirm = document.getElementById("setup-password-confirm");
+    function checkHint(id, ok) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.style.color = ok ? "var(--accent2)" : "var(--text-dim)";
+    }
+    function updateHints() {
+      var v = pwd.value;
+      var c = pwdConfirm.value;
+      var common = ["password","123456","12345678","qwerty","password123","admin","letmein","welcome","monkey","123456789","abc123","football","iloveyou","admin123","trustno1","sunshine","princess","password1","dragon"];
+      checkHint("hint-length", v.length >= 10);
+      checkHint("hint-case", /[a-z]/.test(v) && /[A-Z]/.test(v));
+      checkHint("hint-number", /\d/.test(v) || /[^a-zA-Z0-9]/.test(v));
+      checkHint("hint-common", common.indexOf(v.toLowerCase()) < 0);
+      checkHint("hint-match", v.length > 0 && v === c);
+    }
+    pwd.addEventListener("input", updateHints);
+    pwdConfirm.addEventListener("input", updateHints);
+
+    document.getElementById("generate-token-btn").addEventListener("click", function() {
+      if (generatedToken) return;
+      generatedToken = "";
+      var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+      var a = new Uint8Array(32);
+      crypto.getRandomValues(a);
+      for (var i = 0; i < a.length; i++) generatedToken += chars[a[i] % chars.length];
+      document.getElementById("token-display").textContent = generatedToken;
+      document.getElementById("token-display-wrap").style.display = "block";
+    });
+
+    document.getElementById("copy-token-btn").addEventListener("click", function() {
+      var text = document.getElementById("token-display").textContent;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).catch(function() {});
+      } else {
+        var range = document.createRange();
+        var el = document.getElementById("token-display");
+        range.selectNode(el);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+      }
+    });
+
+    document.getElementById("setup-form").addEventListener("submit", async function(e) {
+      e.preventDefault();
+      var btn = document.getElementById("setup-btn");
+      var msg = document.getElementById("setup-msg");
+      var method = document.querySelector('input[name="method"]:checked').value;
+      btn.disabled = true; btn.textContent = "Setting up…";
+      msg.style.display = "none";
+
+      var payload = {method: method};
+      if (method === "password") {
+        payload.password = pwd.value;
+        payload.password_confirm = pwdConfirm.value;
+      } else if (method === "token") {
+        if (!generatedToken) {
+          msg.textContent = "Generate a token first.";
+          msg.className = "msg error"; msg.style.display = "block";
+          btn.disabled = false; btn.textContent = "Finish Setup";
+          return;
+        }
+        if (!document.getElementById("token-saved").checked) {
+          msg.textContent = "Confirm that you have saved the token.";
+          msg.className = "msg error"; msg.style.display = "block";
+          btn.disabled = false; btn.textContent = "Finish Setup";
+          return;
+        }
+        payload.token = generatedToken;
+      }
+
+      try {
+        var res  = await fetch("/setup", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        var data = await res.json().catch(function() { return {}; });
+        if (res.ok) {
+          window.location.href = "/";
+          return;
+        }
+        msg.textContent = data.message || "Setup failed";
+        msg.className = "msg error"; msg.style.display = "block";
+      } catch (err) {
+        msg.textContent = "Setup failed";
+        msg.className = "msg error"; msg.style.display = "block";
+      }
+      btn.disabled = false; btn.textContent = "Finish Setup";
+    });
+  </script>
+</body>
+</html>
