@@ -43,8 +43,9 @@ _HASH_METHOD = "pbkdf2:sha256:600000"
 _COMMON_PASSWORDS = {
     "password", "123456", "12345678", "qwerty", "password123",
     "admin", "letmein", "welcome", "monkey", "123456789",
-    "12345678", "abc123", "football", "iloveyou", "admin123",
+    "abc123", "football", "iloveyou", "admin123",
     "trustno1", "sunshine", "princess", "password1", "dragon",
+    "master",
 }
 
 
@@ -190,6 +191,31 @@ def configure_token(existing: Optional[str] = None) -> str:
     _save_method(method="token", token=t)
     _load_state()
     return t
+
+
+class AlreadyConfiguredError(Exception):
+    """Raised when a setup/configuration write is attempted after auth is set."""
+    pass
+
+
+def configure_once(password=None, confirm=None, existing_token=None) -> str:
+    """Atomically check that auth is unconfigured, then configure it.
+
+    Returns the token value for token mode. Raises AlreadyConfiguredError if
+    another thread/process configured auth in the meantime. Raises ValueError
+    for invalid password policy. Only one of ``password`` or ``existing_token``
+    should be supplied.
+    """
+    with _LOCK:
+        state = _load_state()
+        if state.configured:
+            raise AlreadyConfiguredError("Already configured")
+        if password is not None:
+            configure_password(password, confirm)
+            return ""
+        if existing_token is not None:
+            return configure_token(existing_token)
+        return configure_token()
 
 
 def reset() -> None:

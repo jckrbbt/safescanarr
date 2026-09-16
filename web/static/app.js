@@ -326,7 +326,7 @@ function renderTab(tab) {
     var labelBreakdown = "";
     if (showNsfw && sheet.flag_reason) {
       var chips = dedupeLabels(sheet.flag_reason).map(function(l) {
-        var name = formatLabel(l.label);
+        var name = escapeHtml(formatLabel(l.label));
         return '<span class="label-chip">' + name + (l.conf > 0 ? " " + l.conf + "%" : "") + '</span>';
       }).join("");
       labelBreakdown = '<div class="label-breakdown">' + chips + '</div>';
@@ -1257,7 +1257,7 @@ function buildLightboxContent(lb, src, tab, idx) {
   var labelsHtml = "";
   if (sheet && sheet.flag_reason) {
     var rows = dedupeLabels(sheet.flag_reason).map(function(l) {
-      return '<div class="lb-label"><span class="lb-label-name">' + formatLabel(l.label) + '</span>' +
+      return '<div class="lb-label"><span class="lb-label-name">' + escapeHtml(formatLabel(l.label)) + '</span>' +
              (l.conf > 0 ? '<span class="lb-label-risk">' + l.conf + '%</span>' : '') + '</div>';
     }).join("");
     labelsHtml = '<div class="lb-labels-title">Detected</div><div class="lb-labels">' + rows + '</div>';

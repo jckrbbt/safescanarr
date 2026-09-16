@@ -139,6 +139,39 @@ def _throttle_remaining(ip: str) -> float:
         return max(0.0, rec["until"] - time.time())
 
 
+# ── Per-IP pre-verify rate limit (token bucket, ~1 req/s average) ──
+class _TokenBucket:
+    def __init__(self, capacity: float, rate: float):
+        self.capacity = capacity
+        self.rate = rate
+        self.tokens = float(capacity)
+        self.last = time.time()
+
+    def allow(self) -> bool:
+        now = time.time()
+        elapsed = now - self.last
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+        self.last = now
+        if self.tokens >= 1.0:
+            self.tokens -= 1.0
+            return True
+        return False
+
+
+_rate_limit_lock = threading.Lock()
+_rate_limit: dict = {}  # ip -> _TokenBucket
+
+
+def _rate_limit_check(ip: str) -> bool:
+    """Return True if this IP has not exceeded the per-second request budget."""
+    with _rate_limit_lock:
+        bucket = _rate_limit.get(ip)
+        if bucket is None:
+            bucket = _TokenBucket(capacity=3, rate=1.0)
+            _rate_limit[ip] = bucket
+        return bucket.allow()
+
+
 # ── Database (initialised once per process, not per request) ──────
 _db = None
 _db_lock = threading.Lock()
@@ -283,39 +316,36 @@ def setup_route():
     ip = request.remote_addr or "unknown"
     if not _throttle_check(ip):
         return jsonify({"status": "error", "message": "Too many attempts; try again later."}), 429
+    if not _rate_limit_check(ip):
+        return jsonify({"status": "error", "message": "Too many requests; slow down."}), 429
 
     data = request.get_json(silent=True) or {}
     method = (data.get("method") or "").strip().lower()
 
-    # Re-check is_configured under the config write lock path (config_module.save
-    # is atomic and serialised by the GIL in practice, but re-checking here
-    # prevents races from concurrent /setup requests).
+    # Atomically check-then-configure under auth._LOCK so only the first
+    # concurrent /setup request can win; the rest get 409.
     try:
-        if auth.is_configured():
-            return jsonify({"status": "error", "message": "Already configured"}), 409
-
         if method == "password":
             password = (data.get("password") or "").strip()
             confirm = (data.get("password_confirm") or "").strip()
-            try:
-                auth.configure_password(password, confirm)
-            except ValueError as e:
-                _throttle_record(ip, success=False)
-                return jsonify({"status": "error", "message": str(e)}), 400
+            auth.configure_once(password=password, confirm=confirm)
+            generated = None
         elif method == "token":
-            generated = auth.configure_token()
+            client_token = (data.get("token") or "").strip() or None
+            generated = auth.configure_once(existing_token=client_token)
         else:
             return jsonify({"status": "error", "message": "Invalid method"}), 400
+    except auth.AlreadyConfiguredError:
+        return jsonify({"status": "error", "message": "Already configured"}), 409
+    except ValueError as e:
+        _throttle_record(ip, success=False)
+        return jsonify({"status": "error", "message": str(e)}), 400
 
-        session.clear()
-        session["authed"] = True
-        session["csrf"] = os.urandom(24).hex()
-        log.info("First-run setup completed via %s method from %s", method, ip)
-        return jsonify({"status": "ok", "token": generated if method == "token" else None,
-                        "csrf_token": session["csrf"]})
-    except Exception as e:
-        log.exception("Setup failed")
-        return jsonify({"status": "error", "message": "Setup failed"}), 500
+    session.clear()
+    session["authed"] = True
+    session["csrf"] = os.urandom(24).hex()
+    log.info("First-run setup completed via %s method from %s", method, ip)
+    return jsonify({"status": "ok", "token": generated if method == "token" else None})
 
 
 # ── Login ─────────────────────────────────────────────────────────
@@ -333,6 +363,8 @@ def login():
     ip = request.remote_addr or "unknown"
     if not _throttle_check(ip):
         return jsonify({"status": "error", "message": "Too many attempts; try again later."}), 429
+    if not _rate_limit_check(ip):
+        return jsonify({"status": "error", "message": "Too many requests; slow down."}), 429
 
     body = request.get_json(silent=True) or request.form or {}
     supplied = str(body.get("secret", "") or body.get("token", "") or body.get("password", "")).strip()
