@@ -10,6 +10,8 @@
 </head>
 <body>
 
+  <div id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+
   <!-- ── TOP BAR ─────────────────────────────────────────────── -->
   <header class="topbar">
     <div class="topbar-brand">
@@ -19,10 +21,10 @@
       <span class="nav-version" id="nav-version"></span>
     </div>
     <div class="topbar-right">
-      <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ Run Scan Now</button>
-      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out">⏻ Sign out</button>
+      <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ <span>Run Scan Now</span></button>
+      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out"><span>⏻ Sign out</span></button>
       <div class="topbar-search">
-        <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearch()">
+        <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearchDebounced()">
         <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display:none" title="Clear search">✕</button>
       </div>
     </div>
@@ -104,6 +106,7 @@
           </div>
         </div>
         <div id="pending-empty" class="empty-state" style="display:none"><p>🎉 Nothing to review!</p></div>
+        <div id="pending-state" class="state-container"></div>
         <div id="pending-grid" class="sheets-grid"></div>
       </div>
 
@@ -136,6 +139,7 @@
           </div>
         </div>
         <div id="approved-empty" class="empty-state" style="display:none"><p>No approved items yet.</p></div>
+        <div id="approved-state" class="state-container"></div>
         <div id="approved-grid" class="sheets-grid"></div>
       </div>
 
@@ -169,6 +173,7 @@
           </div>
         </div>
         <div id="quarantined-empty" class="empty-state" style="display:none"><p>Quarantine is empty.</p></div>
+        <div id="quarantined-state" class="state-container"></div>
         <div id="quarantined-grid" class="sheets-grid"></div>
       </div>
 
@@ -185,12 +190,6 @@
           <label class="select-all-label">
             <input type="checkbox" id="select-all-rejected" onchange="toggleSelectAll('rejected')"> Select all
           </label>
-          <div class="bulk-actions" id="bulk-actions-rejected" style="display:none">
-            <span id="selected-count-rejected" class="badge"></span>
-            <button class="btn btn-secondary btn-sm" onclick="bulkAction('rejected','remove-rejected')">🗑 Remove Entry</button>
-            <button class="btn btn-secondary btn-sm" id="bulk-select-all-rejected" onclick="selectAllVisible('rejected')" style="display:none">☑ Select All</button>
-            <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
-          </div>
           <div class="sort-control">
             <select class="select select-sm" onchange="sortTab('rejected', this.value)">
               <option value="risk">Risk score</option>
@@ -199,8 +198,15 @@
               <option value="size">File size</option>
             </select>
           </div>
+          <div class="bulk-actions" id="bulk-actions-rejected" style="display:none">
+            <span id="selected-count-rejected" class="badge"></span>
+            <button class="btn btn-secondary btn-sm" onclick="bulkAction('rejected','remove-rejected')">🗑 Remove Entry</button>
+            <button class="btn btn-secondary btn-sm" id="bulk-select-all-rejected" onclick="selectAllVisible('rejected')" style="display:none">☑ Select All</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
+          </div>
         </div>
         <div id="rejected-empty" class="empty-state" style="display:none"><p>No rejected items.</p></div>
+        <div id="rejected-state" class="state-container"></div>
         <div id="rejected-grid" class="sheets-grid"></div>
       </div>
 
@@ -212,6 +218,7 @@
             <button class="btn btn-secondary" onclick="loadStats(); loadStatsPage()">↻ Refresh</button>
           </div>
         </div>
+        <div id="stats-state" class="state-container"></div>
         <div id="stats-content" class="stats-grid"></div>
       </div>
 
@@ -220,11 +227,11 @@
         <div class="page-header">
           <div class="header-left">
             <h1>Configuration</h1>
-            <button class="btn btn-primary" onclick="saveConfig()">💾 Save</button>
           </div>
         </div>
         <div id="config-msg" class="msg" style="display:none"></div>
-        <div class="config-form">
+        <div id="config-state" class="state-container"></div>
+        <div class="config-form" id="config-form">
 
           <section class="config-section">
             <h2>NSFW Detection</h2>
@@ -452,6 +459,10 @@
           </section>
 
         </div>
+        <div class="config-save-bar">
+          <span id="config-dirty" class="config-dirty" style="display:none">Unsaved changes</span>
+          <button class="btn btn-primary" onclick="saveConfig()">💾 Save</button>
+        </div>
       </div>
 
       <!-- ── SEARCH RESULTS ───────────────────────────────── -->
@@ -498,7 +509,6 @@
     </div>
   </div>
 
-  <div id="toast" class="toast" style="display:none"></div>
   <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="toggleSidebar()"></div>
   <script src="/static/app.js"></script>
 </body>

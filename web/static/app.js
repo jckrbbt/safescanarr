@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v0.65 ───────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.5 ───────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
@@ -11,6 +11,7 @@ let pageSize      = 20;
 let tabSort       = {pending: "risk", approved: "date", quarantined: "risk", rejected: "date"};
 let approvedSourceFilter = "";
 let tabPage       = {};
+let searchAbort   = null;
 
 TABS.forEach(function(t) {
   tabSheets[t]  = [];
@@ -20,6 +21,7 @@ TABS.forEach(function(t) {
 
 // ── Auth / CSRF helpers ───────────────────────────────────────────
 var _deleteOnReject = false;   // set from /api/version
+var _authMethod     = "token";  // set from /api/version
 
 function csrfToken() {
   var m = document.querySelector('meta[name="csrf-token"]');
@@ -28,6 +30,11 @@ function csrfToken() {
 
 function redirectToLogin() {
   window.location.href = "/login";
+}
+
+function isInputTarget(el) {
+  var tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
+  return tag === "input" || tag === "textarea" || tag === "select" || (el && el.isContentEditable);
 }
 
 // Wrapper around fetch: attaches the CSRF header to state-changing requests and
@@ -86,10 +93,16 @@ document.addEventListener("DOMContentLoaded", function() {
   try {
     var pref     = localStorage.getItem("sidebarCollapsed");
     var sidebar  = document.querySelector(".sidebar");
-    var isMobile = window.innerWidth <= 768;
+    var isMobile = window.matchMedia("(max-width: 900px)").matches;
     if (pref === null) { if (isMobile) sidebar.classList.add("collapsed"); }
     else if (pref === "true") sidebar.classList.add("collapsed");
   } catch(e) {}
+
+  // Config dirty-state tracking (after initial load)
+  initConfigDirtyTracking();
+
+  // Keyboard shortcuts
+  initKeyboardShortcuts();
 });
 
 // ── Navigation ────────────────────────────────────────────────────
@@ -107,6 +120,51 @@ function navigateTo(page) {
   if (page === "stats")    loadStatsPage();
 }
 
+// ── State system ──────────────────────────────────────────────────
+function renderState(container, kind, opts) {
+  opts = opts || {};
+  if (typeof container === "string") container = document.getElementById(container);
+  if (!container) return;
+  container.innerHTML = "";
+  container.style.display = "block";
+
+  if (kind === "loading") {
+    container.innerHTML =
+      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>' +
+      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>' +
+      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>';
+    return;
+  }
+
+  var icons = {empty: "📭", error: "⚠️", search: "🔍"};
+  var icon  = opts.icon || icons[kind] || "";
+  var title = opts.title || (kind === "empty" ? "Nothing here" : "Something went wrong");
+  var body  = opts.body  || "";
+  var action = opts.action;
+
+  var html = '<div class="state">' +
+    '<div class="state-icon">' + icon + '</div>' +
+    '<div class="state-title">' + escapeHtml(title) + '</div>';
+  if (body) html += '<div class="state-body">' + escapeHtml(body) + '</div>';
+  if (action) {
+    html += '<button class="btn btn-secondary" id="state-action-btn">' + escapeHtml(action.label) + '</button>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  if (action) {
+    var btn = container.querySelector("#state-action-btn");
+    if (btn) btn.addEventListener("click", action.onClick);
+  }
+}
+
+function clearState(container) {
+  if (typeof container === "string") container = document.getElementById(container);
+  if (!container) return;
+  container.innerHTML = "";
+  container.style.display = "none";
+}
+
 // ── Version ───────────────────────────────────────────────────────
 async function loadVersion() {
   try {
@@ -114,6 +172,7 @@ async function loadVersion() {
     var d   = await res.json();
     document.getElementById("nav-version").textContent = "v" + d.version;
     _deleteOnReject = !!d.delete_on_reject;
+    _authMethod = d.auth_method || "token";
   } catch(e) {}
 }
 
@@ -138,13 +197,25 @@ async function loadPage(tab, resetPage) {
   var search = (document.getElementById("global-search") || {value:""}).value || "";
   var url    = "/api/sheets?state=" + tab + "&search=" + encodeURIComponent(search.toLowerCase());
   if (tab === "approved" && approvedSourceFilter) url += "&source=" + approvedSourceFilter;
-  var res = await apiFetch(url);
-  tabSheets[tab] = await res.json();
-  selections[tab].clear();
-  if (!window._stems) window._stems = {};
-  window._stems[tab] = {};
-  renderTab(tab);
-  updateBulkBar(tab);
+
+  clearState(tab + "-state");
+  renderState(tab + "-state", "loading");
+  try {
+    var res = await apiFetch(url);
+    tabSheets[tab] = await res.json();
+    selections[tab].clear();
+    if (!window._stems) window._stems = {};
+    window._stems[tab] = {};
+    renderTab(tab);
+    updateBulkBar(tab);
+  } catch (e) {
+    clearState(tab + "-state");
+    renderState(tab + "-state", "error", {
+      title: "Could not load " + tab,
+      body: e.message || "Network error",
+      action: {label: "Retry", onClick: function() { loadPage(tab, true); }}
+    });
+  }
 }
 
 function filterApproved(source) {
@@ -175,18 +246,52 @@ function applySortOrder(sheets, sortBy) {
   return sorted;
 }
 
+function riskClass(confidence) {
+  if (confidence == null) return "risk-low";
+  var pct = confidence * 100;
+  if (pct < 40) return "risk-low";
+  if (pct < 75) return "risk-med";
+  return "risk-high";
+}
+
+function riskBadge(confidence, reason, isApproved) {
+  if (confidence == null) return "";
+  var pct = Math.round(confidence * 100);
+  var tip = reason ? escapeHtml(reason) : (pct === 0 ? "No risk detected" : "NSFW detected");
+  var cls = isApproved ? "risk-badge-clean" : riskClass(confidence);
+  var meterColor = isApproved ? "var(--text-dim)" : (pct >= 75 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--accent2)");
+  return '<span class="risk-badge ' + cls + '" title="' + tip + '">' +
+           pct + '% risk' +
+           '<span class="risk-meter" aria-hidden="true"><span class="risk-meter-bar" style="width:' + pct + '%;background:' + meterColor + '"></span></span>' +
+         '</span>';
+}
+
 function renderTab(tab) {
   var grid  = document.getElementById(tab + "-grid");
   var empty = document.getElementById(tab + "-empty");
+  var state = document.getElementById(tab + "-state");
   if (!grid) return;
   grid.innerHTML = "";
 
   var sheets = tabSheets[tab];
   if (sheets.length === 0) {
-    if (empty) empty.style.display = "block";
+    if (empty) {
+      empty.style.display = "block";
+      var messages = {
+        pending:     ["Nothing to review", "All caught up — run a scan to check for new media.", "▶ Run a Scan", function() { toggleScan(); }],
+        approved:    ["No approved items yet", "Approved content appears here.", null, null],
+        quarantined: ["Quarantine is empty", "Nothing is waiting for a decision.", null, null],
+        rejected:    ["No rejected items", "Rejected items are logged here.", null, null]
+      };
+      var m = messages[tab];
+      var action = m[2] ? {label: m[2], onClick: m[3]} : null;
+      renderState(state, "empty", {icon: "📭", title: m[0], body: m[1], action: action});
+    }
+    renderPagination(tab, 1, 1, 0);
     return;
   }
   if (empty) empty.style.display = "none";
+  clearState(state);
 
   // Apply sort
   var sortBy = tabSort[tab] || "risk";
@@ -214,17 +319,10 @@ function renderTab(tab) {
     card.className = "sheet-card" + (showNsfw ? " flagged" : "") +
                      (selections[tab].has(sheet.stem) ? " selected" : "");
     card.dataset.stem = sheet.stem;
+    card.tabIndex = 0;
 
-    // Confidence badge
-    var confBadge = "";
-    if (sheet.nsfw_confidence != null) {
-      var pct = Math.round(sheet.nsfw_confidence * 100);
-      var tip = sheet.flag_reason ? escapeHtml(sheet.flag_reason) : (pct === 0 ? "No risk detected" : "NSFW detected");
-      var badgeColor = isApproved ? "var(--text-dim)" : "";
-      confBadge = '<span class="risk-badge' + (isApproved ? ' risk-badge-clean' : '') + '" title="' + tip + '">' + pct + '% risk</span>';
-    }
+    var confBadge = riskBadge(sheet.nsfw_confidence, sheet.flag_reason, isApproved);
 
-    // Label chips (deduped)
     var labelBreakdown = "";
     if (showNsfw && sheet.flag_reason) {
       var chips = dedupeLabels(sheet.flag_reason).map(function(l) {
@@ -234,7 +332,6 @@ function renderTab(tab) {
       labelBreakdown = '<div class="label-breakdown">' + chips + '</div>';
     }
 
-    // Image
     var imgHtml = '<div class="sheet-img-placeholder">No sheet</div>';
     if (sheet.has_sheet) {
       var src = "/api/sheets/image/" + encodeURIComponent(sheet.filename);
@@ -262,7 +359,6 @@ function renderTab(tab) {
         renderActions(tab, idx, sheet) +
       '</div>';
 
-    // Bind image click with tab+idx for lightbox
     var img = card.querySelector(".sheet-img");
     if (img) {
       var _s = img.src, _t = tab, _i = idx;
@@ -273,6 +369,12 @@ function renderTab(tab) {
       var _hs = hidden.dataset.src;
       hidden.addEventListener("click", function() { revealImage(hidden, _hs); });
     }
+    card.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") {
+        var img2 = card.querySelector(".sheet-img");
+        if (img2) img2.click();
+      }
+    });
 
     grid.appendChild(card);
   });
@@ -362,7 +464,8 @@ function confirmSingle(tab, action, idx) {
     _deleteOnReject
       ? "This will permanently delete the source video for \"" + stem + "\". This cannot be undone."
       : "This will move the source video for \"" + stem + "\" to quarantine. You can still restore or delete it later.",
-    async function() { closeModal(); await singleAction(tab, action, idx); }
+    async function() { closeModal(); await singleAction(tab, action, idx); },
+    "danger"
   );
 }
 
@@ -383,7 +486,8 @@ function confirmBulkAction(tab, action) {
     _deleteOnReject
       ? "This will permanently delete " + n + " source video file" + (n > 1 ? "s" : "") + ". This cannot be undone."
       : "This will move " + n + " source video file" + (n > 1 ? "s" : "") + " to quarantine. Nothing is deleted.",
-    async function() { closeModal(); await bulkAction(tab, action); }
+    async function() { closeModal(); await bulkAction(tab, action); },
+    "danger"
   );
 }
 
@@ -440,10 +544,10 @@ function setScanRunning(running) {
   var btn = document.getElementById("scan-btn");
   if (!btn) return;
   if (running) {
-    btn.textContent = "■ Stop Scan";
+    btn.innerHTML = "■ <span>Stop Scan</span>";
     btn.className   = "btn btn-danger btn-sm";
   } else {
-    btn.textContent = "▶ Run Scan Now";
+    btn.innerHTML = "▶ <span>Run Scan Now</span>";
     btn.className   = "btn btn-primary btn-sm";
   }
 }
@@ -512,6 +616,12 @@ function updateBulkBar(tab) {
 }
 
 // ── Search ────────────────────────────────────────────────────────
+var searchTimer = null;
+function onGlobalSearchDebounced() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(onGlobalSearch, 250);
+}
+
 async function onGlobalSearch() {
   var q        = ((document.getElementById("global-search") || {value:""}).value || "").trim();
   var clearBtn = document.getElementById("search-clear");
@@ -532,26 +642,38 @@ async function onGlobalSearch() {
   if (heading) heading.textContent = "Search: " + q;
 
   var container = document.getElementById("search-results");
-  if (container) container.innerHTML = '<p style="color:var(--text-dim);padding:20px 0">Searching…</p>';
+  if (!container) return;
+  container.innerHTML = '';
+  renderState(container, "loading");
+
+  if (searchAbort) searchAbort.abort();
+  searchAbort = new AbortController();
 
   var tabLabels = {pending:"Review", approved:"Approved", quarantined:"Quarantine", rejected:"Rejected"};
   var sections  = [];
 
-  for (var i = 0; i < TABS.length; i++) {
-    var tab = TABS[i];
-    var res = await apiFetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(q.toLowerCase()));
-    var sheets = await res.json();
-    tabSheets[tab] = sheets;
-    if (sheets.length > 0) sections.push({tab:tab, label:tabLabels[tab], sheets:sheets});
-  }
-
-  if (!container) return;
-  if (sections.length === 0) {
-    container.innerHTML = '<div class="search-empty">No results found for "' + escapeHtml(q) + '"</div>';
-    return;
+  try {
+    for (var i = 0; i < TABS.length; i++) {
+      var tab = TABS[i];
+      var res = await apiFetch("/api/sheets?state=" + tab + "&search=" + encodeURIComponent(q.toLowerCase()));
+      var sheets = await res.json();
+      tabSheets[tab] = sheets;
+      if (sheets.length > 0) sections.push({tab:tab, label:tabLabels[tab], sheets:sheets});
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      container.innerHTML = '';
+      renderState(container, "error", {title: "Search failed", body: e.message, action: {label: "Retry", onClick: onGlobalSearch}});
+      return;
+    }
   }
 
   container.innerHTML = "";
+  if (sections.length === 0) {
+    renderState(container, "search", {title: "No results", body: "No matches for \"" + escapeHtml(q) + "\""});
+    return;
+  }
+
   sections.forEach(function(sec) {
     var section = document.createElement("div");
     section.className = "search-section";
@@ -570,11 +692,7 @@ async function onGlobalSearch() {
       var isRejected = sec.tab === "rejected";
       var showNsfw   = sheet.flagged && !isApproved && sec.tab !== "quarantined" && sec.tab !== "rejected";
 
-      var confBadge = "";
-      if (sheet.nsfw_confidence != null) {
-        var pct2 = Math.round(sheet.nsfw_confidence * 100);
-        confBadge = '<span class="risk-badge' + (isApproved ? ' risk-badge-clean' : '') + '">' + pct2 + '% risk</span>';
-      }
+      var confBadge = riskBadge(sheet.nsfw_confidence, sheet.flag_reason, isApproved);
 
       var imgHtml2 = '<div class="sheet-img-placeholder">No sheet</div>';
       if (sheet.has_sheet) {
@@ -632,58 +750,76 @@ function clearSearch() {
 // ── Stats page ───────────────────────────────────────────────────
 async function loadStatsPage() {
   var container = document.getElementById("stats-content");
+  var state     = document.getElementById("stats-state");
   if (!container) return;
-  container.innerHTML = '<p style="color:var(--text-dim);padding:20px 0">Loading...</p>';
+  clearState(state);
+  renderState(state, "loading");
 
-  var res   = await apiFetch("/api/stats/full");
-  var stats = await res.json();
+  try {
+    var res   = await apiFetch("/api/stats/full");
+    var stats = await res.json();
+    clearState(state);
 
-  var by     = stats.by_state   || {};
-  var bd     = stats.breakdown  || {};
-  var total  = stats.total      || 0;
+    var by     = stats.by_state   || {};
+    var bd     = stats.breakdown  || {};
+    var total  = stats.total      || 0;
 
-  function pct(n) { return total > 0 ? Math.round(n / total * 100) : 0; }
-  function card(title, value, sub, color) {
-    return '<div class="stat-card">' +
-      '<div class="stat-value" style="color:' + (color || "var(--text)") + '">' + value + '</div>' +
-      '<div class="stat-title">' + title + '</div>' +
-      (sub ? '<div class="stat-sub">' + sub + '</div>' : '') +
-    '</div>';
+    function pct(n) { return total > 0 ? Math.round(n / total * 100) : 0; }
+    function card(title, value, sub, color) {
+      return '<div class="stat-card">' +
+        '<div class="stat-value" style="color:' + (color || "var(--text)") + '">' + value + '</div>' +
+        '<div class="stat-title">' + title + '</div>' +
+        (sub ? '<div class="stat-sub">' + sub + '</div>' : '') +
+      '</div>';
+    }
+
+    var summary =
+      card("Total Scanned",  total, "", "var(--text)") +
+      card("Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
+      card("Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
+      card("Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
+      card("Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)") +
+      card("Flagged",   stats.total_flagged || 0, pct(stats.total_flagged || 0) + "% of total", "var(--danger)");
+
+    var autoApproved   = bd["approved_auto"]  || 0;
+    var manualApproved = bd["approved_user"]  || 0;
+    var autoRejected   = bd["rejected_auto"]  || 0;
+    var manualRejected = bd["rejected_user"]  || 0;
+
+    var breakdown =
+      '<div class="stats-section-title">Auto vs Manual</div>' +
+      '<div class="stat-row"><span class="stat-row-label">Auto-approved</span><span class="stat-row-value">' + autoApproved + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Manually approved</span><span class="stat-row-value">' + manualApproved + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Auto-rejected</span><span class="stat-row-value">' + autoRejected + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>' +
+      (stats.avg_risk_flagged > 0 ? '<div class="stat-row"><span class="stat-row-label">Avg risk score (flagged)</span><span class="stat-row-value">' + Math.round(stats.avg_risk_flagged * 100) + '%</span></div>' : '');
+
+    container.innerHTML =
+      '<div class="stat-cards">' + summary + '</div>' +
+      '<div class="stats-panel">' + breakdown + '</div>';
+  } catch (e) {
+    clearState(state);
+    renderState(state, "error", {title: "Could not load stats", body: e.message, action: {label: "Retry", onClick: loadStatsPage}});
   }
-
-  // Summary cards row
-  var summary =
-    card("Total Scanned",  total, "", "var(--text)") +
-    card("Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
-    card("Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
-    card("Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
-    card("Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)") +
-    card("Flagged",   stats.total_flagged || 0, pct(stats.total_flagged || 0) + "% of total", "var(--danger)");
-
-  // Auto vs manual breakdown
-  var autoApproved   = bd["approved_auto"]  || 0;
-  var manualApproved = bd["approved_user"]  || 0;
-  var autoRejected   = bd["rejected_auto"]  || 0;
-  var manualRejected = bd["rejected_user"]  || 0;
-
-  var breakdown =
-    '<div class="stats-section-title">Auto vs Manual</div>' +
-    '<div class="stat-row"><span class="stat-row-label">Auto-approved</span><span class="stat-row-value">' + autoApproved + '</span></div>' +
-    '<div class="stat-row"><span class="stat-row-label">Manually approved</span><span class="stat-row-value">' + manualApproved + '</span></div>' +
-    '<div class="stat-row"><span class="stat-row-label">Auto-rejected</span><span class="stat-row-value">' + autoRejected + '</span></div>' +
-    '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>' +
-    (stats.avg_risk_flagged > 0 ? '<div class="stat-row"><span class="stat-row-label">Avg risk score (flagged)</span><span class="stat-row-value">' + Math.round(stats.avg_risk_flagged * 100) + '%</span></div>' : '');
-
-  container.innerHTML =
-    '<div class="stat-cards">' + summary + '</div>' +
-    '<div class="stats-panel">' + breakdown + '</div>';
 }
 
 // ── Config ────────────────────────────────────────────────────────
 async function loadConfig() {
-  var res   = await apiFetch("/api/config");
-  var cfg = await res.json();
-  // Set profile radio
+  var state = document.getElementById("config-state");
+  renderState(state, "loading");
+  try {
+    var res   = await apiFetch("/api/config");
+    var cfg = await res.json();
+    clearState(state);
+    fillConfigForm(cfg);
+    setConfigDirty(false);
+  } catch (e) {
+    clearState(state);
+    renderState(state, "error", {title: "Could not load config", body: e.message, action: {label: "Retry", onClick: loadConfig}});
+  }
+}
+
+function fillConfigForm(cfg) {
   var profile = cfg.detection_profile || "balanced";
   var profileRadio = document.querySelector("input[name='detection-profile'][value='" + profile + "']");
   if (profileRadio) profileRadio.checked = true;
@@ -705,7 +841,6 @@ async function loadConfig() {
   document.getElementById("cfg-poll-interval").value        = cfg.poll_interval_seconds || 600;
   document.getElementById("cfg-sonarr-url").value           = cfg.sonarr_url          || "";
   document.getElementById("cfg-radarr-url").value           = cfg.radarr_url          || "";
-  // API keys are never sent to the browser — only whether one is configured.
   window._sonarrKeySet = !!cfg.sonarr_api_key_set;
   window._radarrKeySet = !!cfg.radarr_api_key_set;
   setKeyField("cfg-sonarr-key", window._sonarrKeySet);
@@ -720,7 +855,6 @@ async function loadConfig() {
   checkArrKeys();
 }
 
-// ── Detection profiles ───────────────────────────────────────────
 var PROFILES = {
   conservative: {zone_auto_approve: 0.2, zone_quarantine: 0.55, zone_auto_reject: 0.85},
   balanced:     {zone_auto_approve: 0.4, zone_quarantine: 0.6,  zone_auto_reject: 0.85},
@@ -739,6 +873,21 @@ function applyProfile(profile) {
   document.getElementById("cfg-zone-approve").value    = p.zone_auto_approve;
   document.getElementById("cfg-zone-quarantine").value = p.zone_quarantine;
   document.getElementById("cfg-zone-reject").value     = p.zone_auto_reject;
+}
+
+function initConfigDirtyTracking() {
+  var form = document.getElementById("config-form");
+  if (!form) return;
+  var inputs = form.querySelectorAll("input, select, textarea");
+  inputs.forEach(function(el) {
+    el.addEventListener("input", function() { setConfigDirty(true); });
+    el.addEventListener("change", function() { setConfigDirty(true); });
+  });
+}
+
+function setConfigDirty(dirty) {
+  var el = document.getElementById("config-dirty");
+  if (el) el.style.display = dirty ? "inline" : "none";
 }
 
 async function saveConfig() {
@@ -767,7 +916,6 @@ async function saveConfig() {
     vcs_grid:                    document.getElementById("cfg-vcs-grid").value.trim(),
     vcsi_timeout_seconds:        parseInt(document.getElementById("cfg-vcsi-timeout").value),
   };
-  // Only send API keys when the user actually typed one; blank means "unchanged".
   var sKey = document.getElementById("cfg-sonarr-key").value.trim();
   var rKey = document.getElementById("cfg-radarr-key").value.trim();
   if (sKey) payload.sonarr_api_key = sKey;
@@ -780,6 +928,7 @@ async function saveConfig() {
     window._radarrKeySet = window._radarrKeySet || !!rKey;
     setKeyField("cfg-sonarr-key", window._sonarrKeySet);
     setKeyField("cfg-radarr-key", window._radarrKeySet);
+    setConfigDirty(false);
     checkArrKeys();
   }
   else {
@@ -813,6 +962,7 @@ function renderWatchFolders() {
 function removeWatchFolder(idx) {
   window._watchFolders.splice(idx, 1);
   renderWatchFolders();
+  setConfigDirty(true);
 }
 
 function openFolderBrowser() {
@@ -822,7 +972,7 @@ function openFolderBrowser() {
   overlay.id = "folder-browser";
   overlay.className = "modal-overlay";
   overlay.innerHTML =
-    '<div class="modal folder-browser-modal">' +
+    '<div class="modal folder-browser-modal" role="dialog" aria-modal="true">' +
       '<h2>Add Watch Folder</h2>' +
       '<div id="folder-browser-path" class="folder-browser-path"></div>' +
       '<div id="folder-browser-list" class="folder-browser-list">' +
@@ -830,20 +980,24 @@ function openFolderBrowser() {
       '</div>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-primary" id="folder-browser-use">Use This Folder</button>' +
-        '<button class="btn btn-secondary" onclick="closeFolderBrowser()">Cancel</button>' +
+        '<button class="btn btn-secondary" id="folder-browser-cancel">Cancel</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(overlay);
+  overlay.addEventListener("click", function(e) { if (e.target === overlay) closeFolderBrowser(); });
   document.getElementById("folder-browser-use").onclick = function() {
     var p = window._fsCurrentPath;
     if (!p) return;
     if ((window._watchFolders || []).indexOf(p) < 0) {
       window._watchFolders.push(p);
       renderWatchFolders();
+      setConfigDirty(true);
     }
     closeFolderBrowser();
   };
+  document.getElementById("folder-browser-cancel").onclick = closeFolderBrowser;
   loadFsPath("");
+  trapFocus(overlay);
 }
 
 function closeFolderBrowser() {
@@ -873,16 +1027,23 @@ async function loadFsPath(path) {
 
   var html = "";
   if (data.parent && data.parent !== data.path) {
-    html += '<div class="folder-browser-item up" onclick=\'loadFsPath(' + escapeHtml(JSON.stringify(data.parent)) + ')\'>⬆ ..</div>';
+    html += '<div class="folder-browser-item up" data-parent="' + escapeHtml(data.parent) + '">⬆ ..</div>';
   }
   if (!data.entries || data.entries.length === 0) {
     html += '<div class="folder-browser-empty">No subdirectories. You can still select this folder.</div>';
   } else {
     html += data.entries.map(function(e) {
-      return '<div class="folder-browser-item" onclick=\'loadFsPath(' + escapeHtml(JSON.stringify(e.path)) + ')\'>📁 ' + escapeHtml(e.name) + '</div>';
+      return '<div class="folder-browser-item" data-path="' + escapeHtml(e.path) + '">📁 ' + escapeHtml(e.name) + '</div>';
     }).join("");
   }
   listEl.innerHTML = html;
+
+  listEl.querySelectorAll(".folder-browser-item").forEach(function(item) {
+    item.addEventListener("click", function() {
+      var p = item.dataset.path || item.dataset.parent;
+      if (p) loadFsPath(p);
+    });
+  });
 }
 
 function setKeyField(id, isSet) {
@@ -996,34 +1157,70 @@ async function restoreVcsArchive(file) {
 async function loadLogs() {
   var lines = document.getElementById("log-lines").value;
   var level = document.getElementById("log-level").value;
-  var res   = await apiFetch("/api/logs?lines=" + lines + "&level=" + level);
-  var data  = await res.json();
-  var out   = document.getElementById("log-output");
-  out.innerHTML = data.lines.map(function(line) {
-    var cls = "log-info";
-    if (line.indexOf("[ERROR]") >= 0)   cls = "log-error";
-    else if (line.indexOf("[WARNING]") >= 0) cls = "log-warn";
-    else if (line.indexOf("[DEBUG]") >= 0)   cls = "log-debug";
-    return '<div class="log-line ' + cls + '">' + escapeHtml(line) + '</div>';
-  }).join("");
-  out.scrollTop = out.scrollHeight;
+  try {
+    var res   = await apiFetch("/api/logs?lines=" + lines + "&level=" + level);
+    var data  = await res.json();
+    var out   = document.getElementById("log-output");
+    out.innerHTML = data.lines.map(function(line) {
+      var cls = "log-info";
+      if (line.indexOf("[ERROR]") >= 0)   cls = "log-error";
+      else if (line.indexOf("[WARNING]") >= 0) cls = "log-warn";
+      else if (line.indexOf("[DEBUG]") >= 0)   cls = "log-debug";
+      return '<div class="log-line ' + cls + '">' + escapeHtml(line) + '</div>';
+    }).join("");
+    out.scrollTop = out.scrollHeight;
+  } catch (e) {
+    var out = document.getElementById("log-output");
+    if (out) out.innerHTML = '<div class="log-line log-error">Failed to load logs: ' + escapeHtml(e.message) + '</div>';
+  }
 }
 
 // ── Modal ─────────────────────────────────────────────────────────
-function showModal(title, body, onConfirm) {
+var _modalReturnFocus = null;
+function showModal(title, body, onConfirm, confirmVariant) {
+  _modalReturnFocus = document.activeElement;
   document.getElementById("modal-title").textContent = title;
   document.getElementById("modal-body").textContent  = body;
-  document.getElementById("modal-confirm").onclick   = onConfirm;
-  document.getElementById("modal-overlay").style.display = "flex";
+  var confirmBtn = document.getElementById("modal-confirm");
+  confirmBtn.onclick = onConfirm;
+  confirmBtn.className = "btn " + (confirmVariant === "danger" ? "btn-danger" : "btn-primary");
+  var overlay = document.getElementById("modal-overlay");
+  overlay.style.display = "flex";
+  trapFocus(overlay);
+  // Focus the safe button by default
+  var cancelBtn = overlay.querySelector(".modal-actions .btn-secondary");
+  if (cancelBtn) cancelBtn.focus();
 }
 function closeModal() {
   document.getElementById("modal-overlay").style.display = "none";
+  if (_modalReturnFocus && _modalReturnFocus.focus) {
+    try { _modalReturnFocus.focus(); } catch(e) {}
+  }
+  _modalReturnFocus = null;
+}
+
+function trapFocus(container) {
+  var focusable = container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (focusable.length === 0) return;
+  var first = focusable[0];
+  var last  = focusable[focusable.length - 1];
+  container.addEventListener("keydown", function(e) {
+    if (e.key !== "Tab") return;
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────
 var _lightboxTab   = null;
 var _lightboxIdx   = null;
 var _lightboxTotal = 0;
+var _lightboxReturnFocus = null;
 
 function dedupeLabels(flagReason) {
   if (!flagReason) return [];
@@ -1041,24 +1238,20 @@ function formatLabel(label) {
   return label.replace(/_/g, " ").toLowerCase().replace(/(^|\s)\S/g, function(c) { return c.toUpperCase(); });
 }
 
-function openLightbox(src, tab, idx) {
-  var existing = document.getElementById("lightbox");
-  if (existing) existing.remove();
-
-  _lightboxTab   = tab  != null ? tab  : null;
-  _lightboxIdx   = idx  != null ? idx  : null;
-  _lightboxTotal = tab  != null ? (tabSheets[tab] || []).length : 0;
+function buildLightboxContent(lb, src, tab, idx) {
+  _lightboxTab   = tab;
+  _lightboxIdx   = idx;
+  _lightboxTotal = tab != null ? (tabSheets[tab] || []).length : 0;
 
   var sheet = (tab != null && idx != null) ? (tabSheets[tab] || [])[idx] : null;
-
-  // Side panel content
   var titleHtml = sheet ? '<div class="lb-title">' + escapeHtml(sheet.stem) + '</div>' : '';
 
   var confHtml = "";
   if (sheet && sheet.nsfw_confidence) {
     var pct   = Math.round(sheet.nsfw_confidence * 100);
-    var color = pct >= 80 ? "var(--danger)" : pct >= 50 ? "var(--warn)" : "var(--accent)";
-    confHtml  = '<div class="lb-risk"><div class="lb-risk-score" style="color:' + color + '">' + pct + '%</div><div class="lb-risk-label">confidence</div></div>';
+    var cls   = riskClass(sheet.nsfw_confidence);
+    var color = pct >= 75 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--accent2)";
+    confHtml  = '<div class="lb-risk"><div class="lb-risk-score ' + cls + '" style="color:' + color + '">' + pct + '%</div><div class="lb-risk-label">confidence</div></div>';
   }
 
   var labelsHtml = "";
@@ -1075,13 +1268,13 @@ function openLightbox(src, tab, idx) {
   var actionsHtml = "";
   if (tab === "pending" && idx != null) {
     actionsHtml = '<div class="lb-actions">' +
-      '<button class="btn btn-success lb-action" onclick="lightboxAction(\'approve\')">✓ Approve</button>' +
-      '<button class="btn btn-danger lb-action"  onclick="lightboxAction(\'reject\')">✗ Reject</button>' +
+      '<button class="btn btn-success lb-action" data-action="approve">✓ Approve</button>' +
+      '<button class="btn btn-danger lb-action" data-action="reject">✗ Reject</button>' +
       '</div>';
   } else if (tab === "quarantined" && idx != null) {
     actionsHtml = '<div class="lb-actions">' +
-      '<button class="btn btn-success lb-action" onclick="lightboxAction(\'approve\')">✓ Restore</button>' +
-      '<button class="btn btn-danger lb-action"  onclick="lightboxAction(\'reject\')">✗ Delete</button>' +
+      '<button class="btn btn-success lb-action" data-action="approve">✓ Restore</button>' +
+      '<button class="btn btn-danger lb-action" data-action="reject">✗ Delete</button>' +
       '</div>';
   }
 
@@ -1089,11 +1282,9 @@ function openLightbox(src, tab, idx) {
   var hasNext = idx != null && idx < _lightboxTotal - 1;
   var counter = idx != null ? '<div class="lb-counter">' + (idx + 1) + ' / ' + _lightboxTotal + '</div>' : '';
 
-  var lb = document.createElement("div");
-  lb.id        = "lightbox";
-  lb.className = "lightbox";
   lb.innerHTML =
-    '<div class="lb-outer" onclick="event.stopPropagation()">' +
+    '<button class="lightbox-close" aria-label="Close">✕</button>' +
+    '<div class="lb-outer" role="dialog" aria-modal="true">' +
       '<div class="lb-img-wrap">' +
         '<img class="lb-img" src="' + src + '" alt="">' +
         counter +
@@ -1107,15 +1298,51 @@ function openLightbox(src, tab, idx) {
       '</div>' +
     '</div>';
 
-  lb.addEventListener("click", closeLightbox);
-  document.body.appendChild(lb);
+  lb.querySelectorAll(".lb-action").forEach(function(btn) {
+    btn.addEventListener("click", function() { lightboxAction(btn.dataset.action); });
+  });
+  lb.querySelector(".lightbox-close").addEventListener("click", closeLightbox);
+  trapFocus(lb);
+}
+
+function openLightbox(src, tab, idx) {
+  var lb = document.getElementById("lightbox");
+  _lightboxReturnFocus = document.activeElement;
+  document.body.style.overflow = "hidden";
+  if (!lb) {
+    lb = document.createElement("div");
+    lb.id        = "lightbox";
+    lb.className = "lightbox";
+    document.body.appendChild(lb);
+  }
+  buildLightboxContent(lb, src, tab, idx);
+  lb.style.display = "flex";
+
+  // Preload neighbours
+  if (tab != null && idx != null) {
+    [-1, 1].forEach(function(d) {
+      var nIdx = idx + d;
+      if (nIdx >= 0 && nIdx < _lightboxTotal) {
+        var s = tabSheets[tab][nIdx];
+        if (s && s.has_sheet) {
+          var img = new Image();
+          img.src = "/api/sheets/image/" + encodeURIComponent(s.filename);
+        }
+      }
+    });
+  }
 }
 
 function closeLightbox() {
   var lb = document.getElementById("lightbox");
-  if (lb) lb.remove();
+  if (lb) lb.style.display = "none";
+  document.body.style.overflow = "";
   _lightboxTab = null;
   _lightboxIdx = null;
+  if (_lightboxReturnFocus && _lightboxReturnFocus.focus) {
+    try { _lightboxReturnFocus.focus(); } catch(e) {}
+  }
+  _lightboxReturnFocus = null;
 }
 
 function lightboxNav(dir) {
@@ -1124,7 +1351,8 @@ function lightboxNav(dir) {
   if (newIdx < 0 || newIdx >= _lightboxTotal) return;
   var sheet = tabSheets[_lightboxTab][newIdx];
   if (!sheet || !sheet.has_sheet) return;
-  openLightbox("/api/sheets/image/" + encodeURIComponent(sheet.filename), _lightboxTab, newIdx);
+  var lb = document.getElementById("lightbox");
+  buildLightboxContent(lb, "/api/sheets/image/" + encodeURIComponent(sheet.filename), _lightboxTab, newIdx);
 }
 
 async function lightboxAction(action) {
@@ -1134,7 +1362,6 @@ async function lightboxAction(action) {
   var next = idx < _lightboxTotal - 1 ? idx + 1 : (idx > 0 ? idx - 1 : null);
 
   if (action === "reject") {
-    // Confirm then advance
     showModal(
       _deleteOnReject ? "Confirm Deletion" : "Confirm Reject",
       _deleteOnReject
@@ -1144,38 +1371,22 @@ async function lightboxAction(action) {
         closeModal();
         closeLightbox();
         await singleAction(tab, "reject", idx);
-        // Advance to next if available
         if (next != null && tabSheets[tab] && tabSheets[tab][next] && tabSheets[tab][next].has_sheet) {
           var s = "/api/sheets/image/" + encodeURIComponent(tabSheets[tab][next].filename);
           openLightbox(s, tab, next);
         }
-      }
+      },
+      "danger"
     );
   } else {
     closeLightbox();
     await singleAction(tab, "approve", idx);
-    // Advance to next if available
     if (next != null && tabSheets[tab] && tabSheets[tab][next] && tabSheets[tab][next].has_sheet) {
       var s2 = "/api/sheets/image/" + encodeURIComponent(tabSheets[tab][next].filename);
       openLightbox(s2, tab, next);
     }
   }
 }
-
-document.addEventListener("keydown", function(e) {
-  if (!document.getElementById("lightbox")) return;
-  if (e.key === "Escape")     { closeLightbox(); return; }
-  if (e.key === "ArrowLeft")  { lightboxNav(-1); return; }
-  if (e.key === "ArrowRight") { lightboxNav(1);  return; }
-  // Shortcuts differ by tab
-  if (_lightboxTab === "quarantined") {
-    if (e.key === "r" || e.key === "R") { lightboxAction("approve"); return; } // Restore
-    if (e.key === "d" || e.key === "D") { lightboxAction("reject");  return; } // Delete
-  } else {
-    if (e.key === "a" || e.key === "A") { lightboxAction("approve"); return; } // Approve
-    if (e.key === "r" || e.key === "R") { lightboxAction("reject");  return; } // Reject
-  }
-});
 
 function revealImage(el, src) {
   var img = document.createElement("img");
@@ -1189,7 +1400,7 @@ function revealImage(el, src) {
 function toggleSidebar() {
   var sidebar  = document.querySelector(".sidebar");
   var backdrop = document.getElementById("sidebar-backdrop");
-  var isMobile = window.innerWidth <= 768;
+  var isMobile = window.matchMedia("(max-width: 900px)").matches;
   if (isMobile) {
     var hidden = sidebar.classList.toggle("collapsed");
     if (backdrop) backdrop.classList.toggle("visible", !hidden);
@@ -1199,25 +1410,50 @@ function toggleSidebar() {
   try { localStorage.setItem("sidebarCollapsed", sidebar.classList.contains("collapsed")); } catch(e) {}
 }
 
-// ── Toast ─────────────────────────────────────────────────────────
+// ── Toast stack ───────────────────────────────────────────────────
 function toast(msg, isError) {
-  var el = document.getElementById("toast");
-  el.textContent = msg;
-  el.style.color = isError ? "var(--danger)" : "var(--accent2)";
-  el.style.display = "block";
-  setTimeout(function() { el.style.display = "none"; }, 3000);
+  var container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    container.setAttribute("role", "status");
+    container.setAttribute("aria-live", "polite");
+    document.body.appendChild(container);
+  }
+  var el = document.createElement("div");
+  el.className = "toast " + (isError ? "error" : "success");
+  el.innerHTML = '<span>' + escapeHtml(msg) + '</span>';
+  var close = document.createElement("span");
+  close.textContent = "✕";
+  close.style.cursor = "pointer";
+  close.style.marginLeft = "8px";
+  close.setAttribute("aria-label", "Dismiss");
+  close.onclick = function() { removeToast(el); };
+  el.appendChild(close);
+  el.addEventListener("click", function(e) { if (e.target !== close) removeToast(el); });
+  container.appendChild(el);
+  var delay = isError ? 4000 : 2500;
+  setTimeout(function() { removeToast(el); }, delay);
+}
+
+function removeToast(el) {
+  if (!el.parentNode) return;
+  el.style.opacity = "0";
+  setTimeout(function() {
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }, 200);
 }
 
 // ── Mobile swipe to open/close sidebar ────────────────────────────
 (function() {
-  var EDGE_TRIGGER_PX = 24;   // touch must start within this many px of the left edge to open
-  var SWIPE_THRESHOLD = 60;   // horizontal delta required to count as a swipe
-  var DIRECTION_RATIO = 1.3;  // |dx| must exceed |dy| by this ratio to be horizontal
+  var EDGE_TRIGGER_PX = 24;
+  var SWIPE_THRESHOLD = 60;
+  var DIRECTION_RATIO = 1.3;
 
   var startX = null, startY = null, fromEdge = false, fromInsideSidebar = false;
 
   function onStart(e) {
-    if (window.innerWidth > 768) return;
+    if (!window.matchMedia("(max-width: 900px)").matches) return;
     var t = e.touches && e.touches[0];
     if (!t) return;
     startX = t.clientX;
@@ -1236,18 +1472,16 @@ function toast(msg, isError) {
     startX = null; startY = null;
 
     if (Math.abs(dx) < SWIPE_THRESHOLD) return;
-    if (Math.abs(dx) < Math.abs(dy) * DIRECTION_RATIO) return; // mostly vertical, ignore
+    if (Math.abs(dx) < Math.abs(dy) * DIRECTION_RATIO) return;
 
     var sidebar = document.querySelector(".sidebar");
     if (!sidebar) return;
     var isOpen  = !sidebar.classList.contains("collapsed");
 
-    // Swipe right from the left edge → open
     if (dx > 0 && fromEdge && !isOpen) {
       toggleSidebar();
       return;
     }
-    // Swipe left anywhere while the sidebar is open → close
     if (dx < 0 && isOpen && (fromInsideSidebar || fromEdge || true)) {
       toggleSidebar();
     }
@@ -1257,8 +1491,95 @@ function toast(msg, isError) {
   document.addEventListener("touchend",   onEnd,   {passive: true});
 })();
 
+// ── Keyboard shortcuts ────────────────────────────────────────────
+function initKeyboardShortcuts() {
+  document.addEventListener("keydown", function(e) {
+    var lightbox = document.getElementById("lightbox");
+    if (lightbox && lightbox.style.display !== "none") {
+      if (e.key === "Escape")     { closeLightbox(); return; }
+      if (e.key === "ArrowLeft")  { lightboxNav(-1); return; }
+      if (e.key === "ArrowRight") { lightboxNav(1);  return; }
+      if (_lightboxTab === "quarantined") {
+        if (e.key === "r" || e.key === "R") { lightboxAction("approve"); return; }
+        if (e.key === "d" || e.key === "D") { lightboxAction("reject");  return; }
+      } else {
+        if (e.key === "a" || e.key === "A") { lightboxAction("approve"); return; }
+        if (e.key === "r" || e.key === "R") { lightboxAction("reject");  return; }
+      }
+      return;
+    }
+
+    // Modal Esc-to-cancel
+    var modal = document.getElementById("modal-overlay");
+    if (modal && modal.style.display !== "none" && e.key === "Escape") {
+      closeModal();
+      return;
+    }
+
+    // Folder browser Esc
+    var fb = document.getElementById("folder-browser");
+    if (fb && fb.style.display !== "none" && e.key === "Escape") {
+      closeFolderBrowser();
+      return;
+    }
+
+    // Shortcut help Esc
+    var help = document.getElementById("shortcut-overlay");
+    if (help && e.key === "Escape") {
+      help.remove();
+      return;
+    }
+
+    if (isInputTarget(e.target)) return;
+
+    if (e.key === "/") {
+      e.preventDefault();
+      var search = document.getElementById("global-search");
+      if (search) search.focus();
+      return;
+    }
+    if (e.key === "Escape") {
+      clearSearch();
+      return;
+    }
+    if (e.key === "?" && !e.shiftKey) {
+      showShortcutHelp();
+      return;
+    }
+    if (e.key >= "1" && e.key <= "4") {
+      var idx = parseInt(e.key) - 1;
+      navigateTo(TABS[idx]);
+      return;
+    }
+  });
+}
+
+function showShortcutHelp() {
+  var existing = document.getElementById("shortcut-overlay");
+  if (existing) { existing.remove(); return; }
+  var overlay = document.createElement("div");
+  overlay.id = "shortcut-overlay";
+  overlay.className = "shortcut-overlay";
+  overlay.innerHTML =
+    '<div class="shortcut-modal">' +
+      '<h2>Keyboard shortcuts</h2>' +
+      '<div class="shortcut-row"><span>Focus search</span><span class="shortcut-key">/</span></div>' +
+      '<div class="shortcut-row"><span>Clear search</span><span class="shortcut-key">Esc</span></div>' +
+      '<div class="shortcut-row"><span>Switch tabs</span><span class="shortcut-key">1 – 4</span></div>' +
+      '<div class="shortcut-row"><span>Lightbox: prev / next</span><span class="shortcut-key">← / →</span></div>' +
+      '<div class="shortcut-row"><span>Lightbox: approve / reject</span><span class="shortcut-key">A / R</span></div>' +
+      '<div class="shortcut-row"><span>Close lightbox / modal</span><span class="shortcut-key">Esc</span></div>' +
+      '<div class="shortcut-row"><span>Show this help</span><span class="shortcut-key">?</span></div>' +
+      '<div class="shortcut-row"><span>Hide help</span><span class="shortcut-key">? / Esc</span></div>' +
+      '<div class="modal-actions" style="margin-top:16px"><button class="btn btn-secondary" onclick="document.getElementById(\'shortcut-overlay\').remove()">Close</button></div>' +
+    '</div>';
+  overlay.addEventListener("click", function(e) { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  trapFocus(overlay);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────
 function escapeHtml(s) {
   if (!s) return "";
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
 }
