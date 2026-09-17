@@ -1492,10 +1492,23 @@ textarea.input-full { resize: vertical; }
 /* ── Stats page ───────────────────────────────────────────────── */
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
+
+.stat-card--hero {
+  grid-column: span 2;
+  text-align: left;
+}
+.stat-card--hero .stat-value { font-size: var(--fs-3xl); }
+
+@media (max-width: 900px) {
+  .stat-cards { grid-template-columns: repeat(2, 1fr); }
+  .stat-card--hero { grid-column: 1 / -1; }
+}
+
+.stats-grid { display: flex; flex-direction: column; gap: var(--space-5); }
 
 .stat-card {
   background: var(--bg2);

@@ -776,8 +776,8 @@ async function loadStatsPage() {
     var total  = stats.total      || 0;
 
     function pct(n) { return total > 0 ? Math.round(n / total * 100) : 0; }
-    function card(title, value, sub, color) {
-      return '<div class="stat-card">' +
+    function card(cls, title, value, sub, color) {
+      return '<div class="stat-card ' + (cls || "") + '">' +
         '<div class="stat-value" style="color:' + (color || "var(--text)") + '">' + value + '</div>' +
         '<div class="stat-title">' + title + '</div>' +
         (sub ? '<div class="stat-sub">' + sub + '</div>' : '') +
@@ -785,29 +785,61 @@ async function loadStatsPage() {
     }
 
     var summary =
-      card("Total Scanned",  total, "", "var(--text)") +
-      card("Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
-      card("Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
-      card("Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
-      card("Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)") +
-      card("Flagged",   stats.total_flagged || 0, pct(stats.total_flagged || 0) + "% of total", "var(--danger)");
+      card("stat-card--hero", "Total Scanned", total, "", "var(--text)") +
+      card("", "Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
+      card("", "Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
+      card("", "Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
+      card("", "Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)");
+
+    function labelBar(label, n, colorVar) {
+      var p = pct(n);
+      return '<div class="stat-label-row">' +
+        '<span class="stat-label-name">' + label + '</span>' +
+        '<div class="stat-label-bar-wrap"><div class="stat-label-bar" style="width:' + p + '%;background:' + colorVar + '"></div></div>' +
+        '<span class="stat-label-count">' + n + '</span>' +
+      '</div>';
+    }
+
+    var stateDist =
+      '<div class="stats-section-title">State Distribution</div>' +
+      labelBar("Approved", by.approved || 0, "var(--accent2)") +
+      labelBar("Pending", by.pending || 0, "var(--accent)") +
+      labelBar("Quarantined", by.quarantined || 0, "var(--warn)") +
+      labelBar("Rejected", by.rejected || 0, "var(--danger)");
 
     var autoApproved   = bd["approved_auto"]  || 0;
     var manualApproved = bd["approved_user"]  || 0;
     var autoRejected   = bd["rejected_auto"]  || 0;
     var manualRejected = bd["rejected_user"]  || 0;
 
-    var breakdown =
+    var autoManual =
       '<div class="stats-section-title">Auto vs Manual</div>' +
       '<div class="stat-row"><span class="stat-row-label">Auto-approved</span><span class="stat-row-value">' + autoApproved + '</span></div>' +
       '<div class="stat-row"><span class="stat-row-label">Manually approved</span><span class="stat-row-value">' + manualApproved + '</span></div>' +
       '<div class="stat-row"><span class="stat-row-label">Auto-rejected</span><span class="stat-row-value">' + autoRejected + '</span></div>' +
-      '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>' +
-      (stats.avg_risk_flagged > 0 ? '<div class="stat-row"><span class="stat-row-label">Avg risk score (flagged)</span><span class="stat-row-value">' + Math.round(stats.avg_risk_flagged * 100) + '%</span></div>' : '');
+      '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>';
+
+    var flaggedTotal = stats.total_flagged || 0;
+    var flaggedPct   = pct(flaggedTotal);
+    var avgRisk      = stats.avg_risk_flagged > 0 ? Math.round(stats.avg_risk_flagged * 100) + '%' : 'n/a';
+    var quarantinedN = by.quarantined || 0;
+    var pendingN     = by.pending || 0;
+
+    var reviewQuality =
+      '<div class="stats-section-title">Review Quality</div>' +
+      '<div class="stat-row"><span class="stat-row-label">Flagged total</span><span class="stat-row-value">' + flaggedTotal + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">% of total</span><span class="stat-row-value">' + flaggedPct + '%</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Avg risk (flagged)</span><span class="stat-row-value">' + avgRisk + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Quarantined</span><span class="stat-row-value">' + quarantinedN + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Pending review</span><span class="stat-row-value">' + pendingN + '</span></div>';
 
     container.innerHTML =
       '<div class="stat-cards">' + summary + '</div>' +
-      '<div class="stats-panel">' + breakdown + '</div>';
+      '<div class="stats-detail">' +
+        '<div class="stats-panel">' + stateDist + '</div>' +
+        '<div class="stats-panel">' + autoManual + '</div>' +
+        '<div class="stats-panel">' + reviewQuality + '</div>' +
+      '</div>';
   } catch (e) {
     clearState(state);
     renderState(state, "error", {title: "Could not load stats", body: e.message, action: {label: "Retry", onClick: loadStatsPage}});
