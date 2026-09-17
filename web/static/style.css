@@ -504,18 +504,7 @@ textarea:focus-visible,
 
 .sheet-actions { display: flex; gap: var(--space-2); }
 
-/* ── Empty state ──────────────────────────────────────────────── */
-.empty-state {
-  text-align: center;
-  padding: 80px var(--space-5);
-  color: var(--text-dim);
-}
-.empty-icon { font-size: 40px; margin-bottom: var(--space-3); }
-.empty-title { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: var(--space-2); }
-.empty-body  { font-size: 14px; max-width: 500px; margin: 0 auto var(--space-3); line-height: 1.5; }
-.empty-state .btn { margin-top: var(--space-2); }
-
-/* ── Config Form ──────────────────────────────────────────────── */
+/* ── Config Form ─────────────────────────────────────────────────── */
 .config-form { max-width: 700px; }
 
 .config-section {
@@ -1904,6 +1893,7 @@ textarea.input-full { resize: vertical; }
   .topbar-right .btn-sm span {
     display: none;
   }
+  .topbar-right .btn-sm { min-width: var(--tap); }
 }
 @media (max-width: 600px) {
   .topbar { padding: 0 var(--space-3); }

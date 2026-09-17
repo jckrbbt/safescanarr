@@ -22,7 +22,7 @@
     </div>
     <div class="topbar-right">
       <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ <span>Run Scan Now</span></button>
-      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out"><span>⏻ Sign out</span></button>
+      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out" aria-label="Sign out">⏻ <span>Sign out</span></button>
       <div class="topbar-search">
         <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearchDebounced()">
         <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display:none" title="Clear search">✕</button>
@@ -105,7 +105,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('pending')">✕ Clear</button>
           </div>
         </div>
-        <div id="pending-empty" class="empty-state" style="display:none"><p>🎉 Nothing to review!</p></div>
         <div id="pending-state" class="state-container"></div>
         <div id="pending-grid" class="sheets-grid"></div>
       </div>
@@ -138,7 +137,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('approved')">✕ Clear</button>
           </div>
         </div>
-        <div id="approved-empty" class="empty-state" style="display:none"><p>No approved items yet.</p></div>
         <div id="approved-state" class="state-container"></div>
         <div id="approved-grid" class="sheets-grid"></div>
       </div>
@@ -172,7 +170,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('quarantined')">✕ Clear</button>
           </div>
         </div>
-        <div id="quarantined-empty" class="empty-state" style="display:none"><p>Quarantine is empty.</p></div>
         <div id="quarantined-state" class="state-container"></div>
         <div id="quarantined-grid" class="sheets-grid"></div>
       </div>
@@ -205,7 +202,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
           </div>
         </div>
-        <div id="rejected-empty" class="empty-state" style="display:none"><p>No rejected items.</p></div>
         <div id="rejected-state" class="state-container"></div>
         <div id="rejected-grid" class="sheets-grid"></div>
       </div>

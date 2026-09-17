@@ -282,29 +282,24 @@ function riskBadge(confidence, reason, isApproved) {
 
 function renderTab(tab) {
   var grid  = document.getElementById(tab + "-grid");
-  var empty = document.getElementById(tab + "-empty");
   var state = document.getElementById(tab + "-state");
   if (!grid) return;
   grid.innerHTML = "";
 
   var sheets = tabSheets[tab];
   if (sheets.length === 0) {
-    if (empty) {
-      empty.style.display = "block";
-      var messages = {
-        pending:     ["Nothing to review", "All caught up — run a scan to check for new media.", "▶ Run a Scan", function() { toggleScan(); }],
-        approved:    ["No approved items yet", "Approved content appears here.", null, null],
-        quarantined: ["Quarantine is empty", "Nothing is waiting for a decision.", null, null],
-        rejected:    ["No rejected items", "Rejected items are logged here.", null, null]
-      };
-      var m = messages[tab];
-      var action = m[2] ? {label: m[2], onClick: m[3]} : null;
-      renderState(state, "empty", {icon: "📭", title: m[0], body: m[1], action: action});
-    }
+    var messages = {
+      pending:     ["Nothing to review", "All caught up — run a scan to check for new media.", "▶ Run a Scan", function() { toggleScan(); }],
+      approved:    ["No approved items yet", "Approved content appears here.", null, null],
+      quarantined: ["Quarantine is empty", "Nothing is waiting for a decision.", null, null],
+      rejected:    ["No rejected items", "Rejected items are logged here.", null, null]
+    };
+    var m = messages[tab];
+    var action = m[2] ? {label: m[2], onClick: m[3]} : null;
+    renderState(state, "empty", {icon: "📭", title: m[0], body: m[1], action: action});
     renderPagination(tab, 1, 1, 0);
     return;
   }
-  if (empty) empty.style.display = "none";
   clearState(state);
 
   // Apply sort
