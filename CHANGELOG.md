@@ -1,5 +1,26 @@
 # Safe Scanarr Changelog
 
+## 1.0.6 (UI refinement)
+
+### Added
+- Modern surface system with layered backgrounds, glass panels, depth shadows, and gradient accents
+- Mobile bottom navigation bar with live state badges
+- Skeleton loading grid with shimmer animation
+- Mobile modal bottom sheets, lightbox swipe gestures, and focus trapping
+- View-transition-aware page navigation
+- Search-context chip showing origin tab
+- Hero metric and distribution bars on stats dashboard
+- Empty-state rendering for logs and all tabs
+
+### Changed
+- Unified responsive breakpoint at 900px; removed unused CSS breakpoint custom properties
+- Risk-low tier now uses the accent colour instead of green
+- Mobile touch targets raised to 44px; inputs use 16px font to prevent iOS zoom
+- Card titles truncate, selected cards get visible focus ring, flagged cards softened
+- Search field uses CSS icon instead of emoji placeholder
+- Login/setup pages polished with safe-area support and larger tap targets
+- Config form widened; input rows flex correctly on all widths
+
 ## 1.0.5
 
 ### Added
