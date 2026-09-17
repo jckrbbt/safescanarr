@@ -1314,6 +1314,36 @@ function openLightbox(src, tab, idx) {
     lb.id        = "lightbox";
     lb.className = "lightbox";
     document.body.appendChild(lb);
+
+    // Lightbox swipe gestures (bound once)
+    var startX = null, startY = null, startEl = null;
+    lb.addEventListener("touchstart", function(e) {
+      if (!e.touches || !e.touches[0]) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      startEl = e.target;
+    }, {passive: true});
+    lb.addEventListener("touchend", function(e) {
+      if (startX == null || startY == null || !e.changedTouches || !e.changedTouches[0]) return;
+      var dx = e.changedTouches[0].clientX - startX;
+      var dy = e.changedTouches[0].clientY - startY;
+      startX = null; startY = null;
+      if (Math.abs(dx) < 60 && Math.abs(dy) < 90) return;
+
+      var panel = lb.querySelector(".lb-panel");
+      var fromPanel = startEl && panel && panel.contains(startEl);
+      var fromImgWrap = startEl && lb.querySelector(".lb-img-wrap") && lb.querySelector(".lb-img-wrap").contains(startEl);
+
+      if (Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        lightboxNav(dx < 0 ? 1 : -1);
+        return;
+      }
+      if (dy > 0 && Math.abs(dy) >= 90 && (fromPanel || fromImgWrap)) {
+        if (!fromPanel || (panel && panel.scrollTop === 0)) {
+          closeLightbox();
+        }
+      }
+    }, {passive: true});
   }
   buildLightboxContent(lb, src, tab, idx);
   lb.style.display = "flex";
