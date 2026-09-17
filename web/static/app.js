@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.5 ───────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.6 ───────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
@@ -147,7 +147,7 @@ function renderState(container, kind, opts) {
     container.classList.add("is-loading");
     var cards = "";
     for (var i = 0; i < 8; i++) {
-      cards += '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>';
+      cards += '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div><div class="skeleton-line short"></div><div class="skeleton-actions"></div></div>';
     }
     container.innerHTML = cards;
     return;

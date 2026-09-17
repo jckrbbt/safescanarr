@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.5 ────────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.6 ────────────────────────────────────────── */
 
 /* ── Reset & Base ─────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -486,6 +486,7 @@ textarea:focus-visible,
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow-1);
+  padding-bottom: 14px;
 }
 .skeleton-img {
   width: 100%;
@@ -495,13 +496,19 @@ textarea:focus-visible,
   animation: shimmer 1.5s infinite;
 }
 .skeleton-line {
-  height: 12px;
+  height: 14px;
   background: var(--bg3);
   border-radius: 4px;
-  margin: 12px var(--space-3);
+  margin: 12px var(--space-3) 0;
   width: 60%;
 }
 .skeleton-line.short { width: 38%; }
+.skeleton-actions {
+  height: 34px;
+  background: var(--bg3);
+  border-radius: 4px;
+  margin: 14px var(--space-3) 0;
+}
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
@@ -1172,7 +1179,7 @@ textarea.input-full { resize: vertical; }
 .mode-desc { font-size: var(--font-sm); color: var(--text-dim); line-height: 1.4; }
 
 .profile-option, .profile-name, .profile-desc,
-.checkbox-label, .toggle-label,
+.config-section .checkbox-label, .config-section .toggle-label,
 .mode-option, .mode-label, .mode-title, .mode-desc {
   text-transform: none;
   letter-spacing: normal;
@@ -2030,7 +2037,8 @@ textarea.input-full { resize: vertical; }
   }
   .sheet-checkbox { width: 24px; height: 24px; }
   .sheet-select { top: 0; left: 0; padding: 10px; }
-  .checkbox-label input[type="checkbox"] { width: 22px; height: 22px; }
+  .checkbox-label input[type="checkbox"],
+  .select-all-label input[type="checkbox"] { width: 22px; height: 22px; }
   .toggle-switch {
     width: 52px;
     height: 30px;
@@ -2053,8 +2061,10 @@ textarea.input-full { resize: vertical; }
   #help-btn { display: none; }
 }
 @media (max-width: 600px) {
-  .topbar { padding: 0 var(--space-3); }
+  .topbar { padding: 0 var(--space-2); }
+  .topbar-brand { gap: var(--space-1); }
   .topbar-right { gap: var(--space-1); }
-  .topbar-search input { width: 140px; }
+  .topbar-search input { width: 110px; }
   .nav-title { display: none; }
+  .nav-version { display: none; }
 }
