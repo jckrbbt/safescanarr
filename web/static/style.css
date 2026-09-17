@@ -228,7 +228,22 @@ textarea:focus-visible,
   gap: var(--space-2);
 }
 .search-section-title .nav-badge { font-size: 11px; }
+.search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(108,140,255,.4);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
 .search-empty { color: var(--text-dim); font-size: 13px; padding: 40px 0; text-align: center; }
+
+.sidebar-link.active.dimmed, .bnav-item.active.dimmed { opacity: .55; }
 
 /* ── Layout ───────────────────────────────────────────────────── */
 .layout {
@@ -562,7 +577,21 @@ textarea:focus-visible,
 .sheet-actions { display: flex; gap: var(--space-2); }
 
 /* ── Config Form ─────────────────────────────────────────────────── */
-.config-form { max-width: 700px; }
+.config-form { max-width: 880px; }
+
+.input-row { align-items: stretch; }
+.input-row .btn { flex: 0 0 auto; }
+.input-row .input-full { flex: 1 1 auto; min-width: 0; }
+
+@media (min-width: 1200px) {
+  .config-form { max-width: 1100px; }
+  .config-sections-2col { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); align-items: start; }
+}
+
+@media (max-width: 900px) {
+  .input-row { flex-wrap: wrap; }
+  .input-row .btn { width: 100%; }
+}
 
 .config-section {
   background: var(--bg2);
@@ -1375,7 +1404,8 @@ textarea.input-full { resize: vertical; }
 }
 
 /* Meta time in rejected tab */
-.meta-time { font-size: 11px; color: var(--text-dim); }
+.meta-time { display: flex; gap: var(--space-2); align-items: baseline; font-size: 11px; color: var(--text-dim); }
+.meta-time-label { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
 
 /* Zone diagram */
 .zone-diagram {
@@ -2020,6 +2050,7 @@ textarea.input-full { resize: vertical; }
     display: none;
   }
   .topbar-right .btn-sm { min-width: var(--tap); }
+  #help-btn { display: none; }
 }
 @media (max-width: 600px) {
   .topbar { padding: 0 var(--space-3); }

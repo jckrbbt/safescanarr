@@ -423,7 +423,7 @@ function renderActions(tab, idx, sheet) {
   }
   if (tab === "rejected") {
     var ts = sheet.state_updated_at ? new Date(sheet.state_updated_at).toLocaleString() : "";
-    return '<div class="meta-time">' + ts + '</div>';
+    return '<div class="meta-time"><span class="meta-time-label">Rejected</span> ' + ts + '</div>';
   }
   return "";
 }
@@ -450,7 +450,10 @@ function renderPagination(tab, page, totalPages, total) {
 
   pag.innerHTML = sizeHtml + prevHtml + infoHtml + nextHtml;
   var grid = document.getElementById(tab + "-grid");
-  if (grid) grid.parentNode.insertBefore(pag, grid);
+  if (grid) {
+    if (grid.nextSibling) grid.parentNode.insertBefore(pag, grid.nextSibling);
+    else grid.parentNode.appendChild(pag);
+  }
 }
 
 function gotoPage(tab, page) {
@@ -648,6 +651,7 @@ function onGlobalSearchDebounced() {
 async function onGlobalSearch() {
   var q        = ((document.getElementById("global-search") || {value:""}).value || "").trim();
   var clearBtn = document.getElementById("search-clear");
+  var origin   = currentTab;
   if (q.length === 0) {
     if (clearBtn) clearBtn.style.display = "none";
     if (currentTab === "search") navigateTo("pending");
@@ -657,12 +661,21 @@ async function onGlobalSearch() {
 
   document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
   document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
+  document.querySelectorAll(".bnav-item").forEach(function(b) { b.classList.remove("active"); });
+  document.querySelectorAll(".sidebar-link, .bnav-item").forEach(function(el) { el.classList.remove("dimmed"); });
   var searchPage = document.getElementById("page-search");
   if (searchPage) searchPage.classList.add("active");
   currentTab = "search";
 
+  var originLink = document.querySelector(".sidebar-link[data-page='" + origin + "']");
+  var originBn   = document.querySelector(".bnav-item[data-page='" + origin + "']");
+  if (originLink) originLink.classList.add("active", "dimmed");
+  if (originBn)   originBn.classList.add("active", "dimmed");
+
   var heading = document.getElementById("search-heading");
-  if (heading) heading.textContent = "Search: " + q;
+  var tabLabels = {pending:"Review", approved:"Approved", quarantined:"Quarantine", rejected:"Rejected", stats:"Stats", config:"Config", logs:"Logs"};
+  var originLabel = tabLabels[origin] || "";
+  if (heading) heading.innerHTML = 'Search Results' + (originLabel ? ' <span class="search-chip">from ' + escapeHtml(originLabel) + '</span>' : '');
 
   var container = document.getElementById("search-results");
   if (!container) return;
@@ -768,6 +781,7 @@ function clearSearch() {
   var clearBtn = document.getElementById("search-clear");
   if (input)    input.value = "";
   if (clearBtn) clearBtn.style.display = "none";
+  document.querySelectorAll(".sidebar-link, .bnav-item").forEach(function(el) { el.classList.remove("dimmed"); });
   navigateTo("pending");
 }
 
@@ -1632,7 +1646,7 @@ function initKeyboardShortcuts() {
       clearSearch();
       return;
     }
-    if (e.key === "?" && !e.shiftKey) {
+    if (e.key === "?") {
       showShortcutHelp();
       return;
     }

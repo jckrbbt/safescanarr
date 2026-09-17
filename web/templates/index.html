@@ -22,6 +22,7 @@
     </div>
     <div class="topbar-right">
       <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ <span>Run Scan Now</span></button>
+      <button class="btn btn-secondary btn-sm" id="help-btn" onclick="showShortcutHelp()" title="Keyboard shortcuts">?</button>
       <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out" aria-label="Sign out">⏻ <span>Sign out</span></button>
       <div class="topbar-search">
         <input type="text" id="global-search" placeholder="Search all tabs…" oninput="onGlobalSearchDebounced()">
@@ -416,7 +417,7 @@
           </section>
 
           <section class="config-section">
-            <h2>vcsi</h2>
+            <h2>Contact Sheets (vcsi)</h2>
             <p class="hint">vcsi generates contact sheet thumbnails. Grid size controls thumbnail count (4x4 = 16 frames). Timeout is the max time allowed per file.</p>
             <label>Grid Size</label>
             <input type="text" id="cfg-vcs-grid" class="input-short" placeholder="4x4">
