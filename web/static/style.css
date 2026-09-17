@@ -1798,7 +1798,44 @@ textarea.input-full { resize: vertical; }
   font-size: 12px;
 }
 
-/* ── Mobile topbar adjustments ────────────────────────────────── */
+/* ── Mobile touch targets + input zoom prevention ─────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .btn, .btn-sm {
+    min-height: var(--tap);
+    padding: 10px var(--space-4);
+    font-size: var(--font-md);
+  }
+  .select, .select-sm, .input-short, .input-full,
+  .topbar-search input { min-height: var(--tap); font-size: 16px; }
+  .sidebar-link { min-height: var(--tap); }
+  .sidebar-toggle,
+  .search-clear,
+  .folder-row-remove,
+  .lightbox-close,
+  .toggle-secret {
+    min-width: var(--tap);
+    min-height: var(--tap);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sheet-checkbox { width: 24px; height: 24px; }
+  .sheet-select { top: 0; left: 0; padding: 10px; }
+  .checkbox-label input[type="checkbox"] { width: 22px; height: 22px; }
+  .toggle-switch {
+    width: 52px;
+    height: 30px;
+  }
+  .toggle-slider::before {
+    width: 24px;
+    height: 24px;
+  }
+  .toggle-switch input:checked + .toggle-slider::before { transform: translateX(22px); }
+  .folder-browser-item { min-height: var(--tap); }
+  .lb-action { min-height: var(--tap); font-size: var(--font-md); }
+}
+
+/* ── Mobile topbar adjustments ───────────────────────────────────────────────────────────────── */
 @media (max-width: 900px) {
   .topbar-right .btn-sm span {
     display: none;
