@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.5 ───────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.6 ───────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
@@ -89,6 +89,11 @@ document.addEventListener("DOMContentLoaded", function() {
     });
   });
 
+  document.querySelectorAll(".bnav-item").forEach(function(btn) {
+    if (btn.id === "bnav-more") return;
+    btn.addEventListener("click", function() { navigateTo(btn.dataset.page); });
+  });
+
   // Restore sidebar state
   try {
     var pref     = localStorage.getItem("sidebarCollapsed");
@@ -107,17 +112,27 @@ document.addEventListener("DOMContentLoaded", function() {
 
 // ── Navigation ────────────────────────────────────────────────────
 function navigateTo(page) {
-  currentTab = page;
-  document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
-  document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
-  var pageEl = document.getElementById("page-" + page);
-  var linkEl = document.querySelector(".sidebar-link[data-page='" + page + "']");
-  if (pageEl) pageEl.classList.add("active");
-  if (linkEl) linkEl.classList.add("active");
-  if (TABS.includes(page)) loadPage(page);
-  if (page === "config")   loadConfig();
-  if (page === "logs")     loadLogs();
-  if (page === "stats")    loadStatsPage();
+  function applyNav() {
+    currentTab = page;
+    document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
+    document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
+    document.querySelectorAll(".bnav-item").forEach(function(b) { b.classList.remove("active"); });
+    var pageEl = document.getElementById("page-" + page);
+    var linkEl = document.querySelector(".sidebar-link[data-page='" + page + "']");
+    var bnEl   = document.querySelector(".bnav-item[data-page='" + page + "']");
+    if (pageEl) pageEl.classList.add("active");
+    if (linkEl) linkEl.classList.add("active");
+    if (bnEl) bnEl.classList.add("active");
+    if (TABS.includes(page)) loadPage(page);
+    if (page === "config")   loadConfig();
+    if (page === "logs")     loadLogs();
+    if (page === "stats")    loadStatsPage();
+  }
+  if (document.startViewTransition && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.startViewTransition(function() { applyNav(); });
+  } else {
+    applyNav();
+  }
 }
 
 // ── State system ──────────────────────────────────────────────────
@@ -129,14 +144,17 @@ function renderState(container, kind, opts) {
   container.style.display = "block";
 
   if (kind === "loading") {
-    container.innerHTML =
-      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>' +
-      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>' +
-      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>';
+    container.classList.add("is-loading");
+    var cards = "";
+    for (var i = 0; i < 8; i++) {
+      cards += '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div><div class="skeleton-line short"></div><div class="skeleton-actions"></div></div>';
+    }
+    container.innerHTML = cards;
     return;
   }
 
   var icons = {empty: "📭", error: "⚠️", search: "🔍"};
+  container.classList.remove("is-loading");
   var icon  = opts.icon || icons[kind] || "";
   var title = opts.title || (kind === "empty" ? "Nothing here" : "Something went wrong");
   var body  = opts.body  || "";
@@ -162,6 +180,7 @@ function clearState(container) {
   if (typeof container === "string") container = document.getElementById(container);
   if (!container) return;
   container.innerHTML = "";
+  container.classList.remove("is-loading");
   container.style.display = "none";
 }
 
@@ -183,9 +202,11 @@ async function loadStats() {
     var stats = await res.json();
     TABS.forEach(function(t) {
       var badge = document.getElementById("badge-" + t);
+      var bnav  = document.getElementById("bnav-badge-" + t);
       var count = document.getElementById(t + "-count");
       var n = stats[t] || 0;
       if (badge) badge.textContent = n > 0 ? n : "";
+      if (bnav)  bnav.textContent  = n > 0 ? n : "";
       if (count) count.textContent = n + " item" + (n !== 1 ? "s" : "");
     });
   } catch(e) {}
@@ -254,12 +275,18 @@ function riskClass(confidence) {
   return "risk-high";
 }
 
+function riskColor(pct) {
+  if (pct >= 75) return "var(--danger)";
+  if (pct >= 40) return "var(--warn)";
+  return "var(--accent)";
+}
+
 function riskBadge(confidence, reason, isApproved) {
   if (confidence == null) return "";
   var pct = Math.round(confidence * 100);
   var tip = reason ? escapeHtml(reason) : (pct === 0 ? "No risk detected" : "NSFW detected");
   var cls = isApproved ? "risk-badge-clean" : riskClass(confidence);
-  var meterColor = isApproved ? "var(--text-dim)" : (pct >= 75 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--accent2)");
+  var meterColor = isApproved ? "var(--text-dim)" : riskColor(pct);
   return '<span class="risk-badge ' + cls + '" title="' + tip + '">' +
            pct + '% risk' +
            '<span class="risk-meter" aria-hidden="true"><span class="risk-meter-bar" style="width:' + pct + '%;background:' + meterColor + '"></span></span>' +
@@ -268,29 +295,24 @@ function riskBadge(confidence, reason, isApproved) {
 
 function renderTab(tab) {
   var grid  = document.getElementById(tab + "-grid");
-  var empty = document.getElementById(tab + "-empty");
   var state = document.getElementById(tab + "-state");
   if (!grid) return;
   grid.innerHTML = "";
 
   var sheets = tabSheets[tab];
   if (sheets.length === 0) {
-    if (empty) {
-      empty.style.display = "block";
-      var messages = {
-        pending:     ["Nothing to review", "All caught up — run a scan to check for new media.", "▶ Run a Scan", function() { toggleScan(); }],
-        approved:    ["No approved items yet", "Approved content appears here.", null, null],
-        quarantined: ["Quarantine is empty", "Nothing is waiting for a decision.", null, null],
-        rejected:    ["No rejected items", "Rejected items are logged here.", null, null]
-      };
-      var m = messages[tab];
-      var action = m[2] ? {label: m[2], onClick: m[3]} : null;
-      renderState(state, "empty", {icon: "📭", title: m[0], body: m[1], action: action});
-    }
+    var messages = {
+      pending:     ["Nothing to review", "All caught up — run a scan to check for new media.", "▶ Run a Scan", function() { toggleScan(); }],
+      approved:    ["No approved items yet", "Approved content appears here.", null, null],
+      quarantined: ["Quarantine is empty", "Nothing is waiting for a decision.", null, null],
+      rejected:    ["No rejected items", "Rejected items are logged here.", null, null]
+    };
+    var m = messages[tab];
+    var action = m[2] ? {label: m[2], onClick: m[3]} : null;
+    renderState(state, "empty", {icon: "📭", title: m[0], body: m[1], action: action});
     renderPagination(tab, 1, 1, 0);
     return;
   }
-  if (empty) empty.style.display = "none";
   clearState(state);
 
   // Apply sort
@@ -353,7 +375,8 @@ function renderTab(tab) {
       nsfwOverlay +
       imgHtml +
       '<div class="sheet-info">' +
-        '<div class="sheet-name">' + confBadge + escapeHtml(sheet.stem) + '</div>' +
+        '<div class="sheet-name">' + confBadge +
+          '<span class="sheet-title-text">' + escapeHtml(sheet.stem) + '</span></div>' +
         labelBreakdown +
         '<div class="sheet-path" title="' + srcPath + '">' + escapeHtml(sheet.source_path || "Unknown") + '</div>' +
         renderActions(tab, idx, sheet) +
@@ -400,7 +423,7 @@ function renderActions(tab, idx, sheet) {
   }
   if (tab === "rejected") {
     var ts = sheet.state_updated_at ? new Date(sheet.state_updated_at).toLocaleString() : "";
-    return '<div class="meta-time">' + ts + '</div>';
+    return '<div class="meta-time"><span class="meta-time-label">Rejected</span> ' + ts + '</div>';
   }
   return "";
 }
@@ -427,7 +450,10 @@ function renderPagination(tab, page, totalPages, total) {
 
   pag.innerHTML = sizeHtml + prevHtml + infoHtml + nextHtml;
   var grid = document.getElementById(tab + "-grid");
-  if (grid) grid.parentNode.insertBefore(pag, grid);
+  if (grid) {
+    if (grid.nextSibling) grid.parentNode.insertBefore(pag, grid.nextSibling);
+    else grid.parentNode.appendChild(pag);
+  }
 }
 
 function gotoPage(tab, page) {
@@ -625,6 +651,7 @@ function onGlobalSearchDebounced() {
 async function onGlobalSearch() {
   var q        = ((document.getElementById("global-search") || {value:""}).value || "").trim();
   var clearBtn = document.getElementById("search-clear");
+  var origin   = currentTab;
   if (q.length === 0) {
     if (clearBtn) clearBtn.style.display = "none";
     if (currentTab === "search") navigateTo("pending");
@@ -634,12 +661,21 @@ async function onGlobalSearch() {
 
   document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
   document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
+  document.querySelectorAll(".bnav-item").forEach(function(b) { b.classList.remove("active"); });
+  document.querySelectorAll(".sidebar-link, .bnav-item").forEach(function(el) { el.classList.remove("dimmed"); });
   var searchPage = document.getElementById("page-search");
   if (searchPage) searchPage.classList.add("active");
   currentTab = "search";
 
+  var originLink = document.querySelector(".sidebar-link[data-page='" + origin + "']");
+  var originBn   = document.querySelector(".bnav-item[data-page='" + origin + "']");
+  if (originLink) originLink.classList.add("active", "dimmed");
+  if (originBn)   originBn.classList.add("active", "dimmed");
+
   var heading = document.getElementById("search-heading");
-  if (heading) heading.textContent = "Search: " + q;
+  var tabLabels = {pending:"Review", approved:"Approved", quarantined:"Quarantine", rejected:"Rejected", stats:"Stats", config:"Config", logs:"Logs"};
+  var originLabel = tabLabels[origin] || "";
+  if (heading) heading.innerHTML = 'Search Results' + (originLabel ? ' <span class="search-chip">from ' + escapeHtml(originLabel) + '</span>' : '');
 
   var container = document.getElementById("search-results");
   if (!container) return;
@@ -710,7 +746,8 @@ async function onGlobalSearch() {
         (showNsfw ? '<div class="flagged-overlay">⚠ NSFW</div>' : "") +
         imgHtml2 +
         '<div class="sheet-info">' +
-          '<div class="sheet-name">' + confBadge + escapeHtml(sheet.stem) + '</div>' +
+          '<div class="sheet-name">' + confBadge +
+          '<span class="sheet-title-text">' + escapeHtml(sheet.stem) + '</span></div>' +
           '<div class="sheet-path" title="' + srcPath2 + '">' + escapeHtml(sheet.source_path || "Unknown") + '</div>' +
           renderActions(sec.tab, idx, sheet) +
         '</div>';
@@ -744,6 +781,7 @@ function clearSearch() {
   var clearBtn = document.getElementById("search-clear");
   if (input)    input.value = "";
   if (clearBtn) clearBtn.style.display = "none";
+  document.querySelectorAll(".sidebar-link, .bnav-item").forEach(function(el) { el.classList.remove("dimmed"); });
   navigateTo("pending");
 }
 
@@ -765,8 +803,8 @@ async function loadStatsPage() {
     var total  = stats.total      || 0;
 
     function pct(n) { return total > 0 ? Math.round(n / total * 100) : 0; }
-    function card(title, value, sub, color) {
-      return '<div class="stat-card">' +
+    function card(cls, title, value, sub, color) {
+      return '<div class="stat-card ' + (cls || "") + '">' +
         '<div class="stat-value" style="color:' + (color || "var(--text)") + '">' + value + '</div>' +
         '<div class="stat-title">' + title + '</div>' +
         (sub ? '<div class="stat-sub">' + sub + '</div>' : '') +
@@ -774,29 +812,61 @@ async function loadStatsPage() {
     }
 
     var summary =
-      card("Total Scanned",  total, "", "var(--text)") +
-      card("Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
-      card("Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
-      card("Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
-      card("Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)") +
-      card("Flagged",   stats.total_flagged || 0, pct(stats.total_flagged || 0) + "% of total", "var(--danger)");
+      card("stat-card--hero", "Total Scanned", total, "", "var(--text)") +
+      card("", "Approved",  (by.approved  || 0), pct(by.approved  || 0) + "% of total", "var(--accent2)") +
+      card("", "Pending",   (by.pending   || 0), pct(by.pending   || 0) + "% of total", "var(--accent)") +
+      card("", "Quarantined",(by.quarantined||0), pct(by.quarantined||0) + "% of total", "var(--warn)") +
+      card("", "Rejected",  (by.rejected  || 0), pct(by.rejected  || 0) + "% of total", "var(--danger)");
+
+    function labelBar(label, n, colorVar) {
+      var p = pct(n);
+      return '<div class="stat-label-row">' +
+        '<span class="stat-label-name">' + label + '</span>' +
+        '<div class="stat-label-bar-wrap"><div class="stat-label-bar" style="width:' + p + '%;background:' + colorVar + '"></div></div>' +
+        '<span class="stat-label-count">' + n + '</span>' +
+      '</div>';
+    }
+
+    var stateDist =
+      '<div class="stats-section-title">State Distribution</div>' +
+      labelBar("Approved", by.approved || 0, "var(--accent2)") +
+      labelBar("Pending", by.pending || 0, "var(--accent)") +
+      labelBar("Quarantined", by.quarantined || 0, "var(--warn)") +
+      labelBar("Rejected", by.rejected || 0, "var(--danger)");
 
     var autoApproved   = bd["approved_auto"]  || 0;
     var manualApproved = bd["approved_user"]  || 0;
     var autoRejected   = bd["rejected_auto"]  || 0;
     var manualRejected = bd["rejected_user"]  || 0;
 
-    var breakdown =
+    var autoManual =
       '<div class="stats-section-title">Auto vs Manual</div>' +
       '<div class="stat-row"><span class="stat-row-label">Auto-approved</span><span class="stat-row-value">' + autoApproved + '</span></div>' +
       '<div class="stat-row"><span class="stat-row-label">Manually approved</span><span class="stat-row-value">' + manualApproved + '</span></div>' +
       '<div class="stat-row"><span class="stat-row-label">Auto-rejected</span><span class="stat-row-value">' + autoRejected + '</span></div>' +
-      '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>' +
-      (stats.avg_risk_flagged > 0 ? '<div class="stat-row"><span class="stat-row-label">Avg risk score (flagged)</span><span class="stat-row-value">' + Math.round(stats.avg_risk_flagged * 100) + '%</span></div>' : '');
+      '<div class="stat-row"><span class="stat-row-label">Manually rejected</span><span class="stat-row-value">' + manualRejected + '</span></div>';
+
+    var flaggedTotal = stats.total_flagged || 0;
+    var flaggedPct   = pct(flaggedTotal);
+    var avgRisk      = stats.avg_risk_flagged > 0 ? Math.round(stats.avg_risk_flagged * 100) + '%' : 'n/a';
+    var quarantinedN = by.quarantined || 0;
+    var pendingN     = by.pending || 0;
+
+    var reviewQuality =
+      '<div class="stats-section-title">Review Quality</div>' +
+      '<div class="stat-row"><span class="stat-row-label">Flagged total</span><span class="stat-row-value">' + flaggedTotal + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">% of total</span><span class="stat-row-value">' + flaggedPct + '%</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Avg risk (flagged)</span><span class="stat-row-value">' + avgRisk + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Quarantined</span><span class="stat-row-value">' + quarantinedN + '</span></div>' +
+      '<div class="stat-row"><span class="stat-row-label">Pending review</span><span class="stat-row-value">' + pendingN + '</span></div>';
 
     container.innerHTML =
       '<div class="stat-cards">' + summary + '</div>' +
-      '<div class="stats-panel">' + breakdown + '</div>';
+      '<div class="stats-detail">' +
+        '<div class="stats-panel">' + stateDist + '</div>' +
+        '<div class="stats-panel">' + autoManual + '</div>' +
+        '<div class="stats-panel">' + reviewQuality + '</div>' +
+      '</div>';
   } catch (e) {
     clearState(state);
     renderState(state, "error", {title: "Could not load stats", body: e.message, action: {label: "Retry", onClick: loadStatsPage}});
@@ -1161,6 +1231,10 @@ async function loadLogs() {
     var res   = await apiFetch("/api/logs?lines=" + lines + "&level=" + level);
     var data  = await res.json();
     var out   = document.getElementById("log-output");
+    if (!data.lines || data.lines.length === 0) {
+      out.innerHTML = '<div class="state"><div class="state-icon">📭</div><div class="state-title">No logs yet</div><div class="state-body">Run a scan or wait for background tasks to produce log output.</div></div>';
+      return;
+    }
     out.innerHTML = data.lines.map(function(line) {
       var cls = "log-info";
       if (line.indexOf("[ERROR]") >= 0)   cls = "log-error";
@@ -1250,7 +1324,7 @@ function buildLightboxContent(lb, src, tab, idx) {
   if (sheet && sheet.nsfw_confidence) {
     var pct   = Math.round(sheet.nsfw_confidence * 100);
     var cls   = riskClass(sheet.nsfw_confidence);
-    var color = pct >= 75 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--accent2)";
+    var color = riskColor(pct);
     confHtml  = '<div class="lb-risk"><div class="lb-risk-score ' + cls + '" style="color:' + color + '">' + pct + '%</div><div class="lb-risk-label">confidence</div></div>';
   }
 
@@ -1314,6 +1388,36 @@ function openLightbox(src, tab, idx) {
     lb.id        = "lightbox";
     lb.className = "lightbox";
     document.body.appendChild(lb);
+
+    // Lightbox swipe gestures (bound once)
+    var startX = null, startY = null, startEl = null;
+    lb.addEventListener("touchstart", function(e) {
+      if (!e.touches || !e.touches[0]) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      startEl = e.target;
+    }, {passive: true});
+    lb.addEventListener("touchend", function(e) {
+      if (startX == null || startY == null || !e.changedTouches || !e.changedTouches[0]) return;
+      var dx = e.changedTouches[0].clientX - startX;
+      var dy = e.changedTouches[0].clientY - startY;
+      startX = null; startY = null;
+      if (Math.abs(dx) < 60 && Math.abs(dy) < 90) return;
+
+      var panel = lb.querySelector(".lb-panel");
+      var fromPanel = startEl && panel && panel.contains(startEl);
+      var fromImgWrap = startEl && lb.querySelector(".lb-img-wrap") && lb.querySelector(".lb-img-wrap").contains(startEl);
+
+      if (Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        lightboxNav(dx < 0 ? 1 : -1);
+        return;
+      }
+      if (dy > 0 && Math.abs(dy) >= 90 && (fromPanel || fromImgWrap)) {
+        if (!fromPanel || (panel && panel.scrollTop === 0)) {
+          closeLightbox();
+        }
+      }
+    }, {passive: true});
   }
   buildLightboxContent(lb, src, tab, idx);
   lb.style.display = "flex";
@@ -1542,7 +1646,7 @@ function initKeyboardShortcuts() {
       clearSearch();
       return;
     }
-    if (e.key === "?" && !e.shiftKey) {
+    if (e.key === "?") {
       showShortcutHelp();
       return;
     }

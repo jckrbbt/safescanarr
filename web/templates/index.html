@@ -22,9 +22,10 @@
     </div>
     <div class="topbar-right">
       <button class="btn btn-primary btn-sm" id="scan-btn" onclick="toggleScan()">▶ <span>Run Scan Now</span></button>
-      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out"><span>⏻ Sign out</span></button>
+      <button class="btn btn-secondary btn-sm" id="help-btn" onclick="showShortcutHelp()" title="Keyboard shortcuts">?</button>
+      <button class="btn btn-secondary btn-sm" onclick="signOut()" title="Sign out" aria-label="Sign out">⏻ <span>Sign out</span></button>
       <div class="topbar-search">
-        <input type="text" id="global-search" placeholder="🔍 Search all tabs…" oninput="onGlobalSearchDebounced()">
+        <input type="text" id="global-search" placeholder="Search all tabs…" oninput="onGlobalSearchDebounced()">
         <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display:none" title="Clear search">✕</button>
       </div>
     </div>
@@ -105,7 +106,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('pending')">✕ Clear</button>
           </div>
         </div>
-        <div id="pending-empty" class="empty-state" style="display:none"><p>🎉 Nothing to review!</p></div>
         <div id="pending-state" class="state-container"></div>
         <div id="pending-grid" class="sheets-grid"></div>
       </div>
@@ -138,7 +138,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('approved')">✕ Clear</button>
           </div>
         </div>
-        <div id="approved-empty" class="empty-state" style="display:none"><p>No approved items yet.</p></div>
         <div id="approved-state" class="state-container"></div>
         <div id="approved-grid" class="sheets-grid"></div>
       </div>
@@ -172,7 +171,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('quarantined')">✕ Clear</button>
           </div>
         </div>
-        <div id="quarantined-empty" class="empty-state" style="display:none"><p>Quarantine is empty.</p></div>
         <div id="quarantined-state" class="state-container"></div>
         <div id="quarantined-grid" class="sheets-grid"></div>
       </div>
@@ -205,7 +203,6 @@
             <button class="btn btn-secondary btn-sm" onclick="clearSelection('rejected')">✕ Clear</button>
           </div>
         </div>
-        <div id="rejected-empty" class="empty-state" style="display:none"><p>No rejected items.</p></div>
         <div id="rejected-state" class="state-container"></div>
         <div id="rejected-grid" class="sheets-grid"></div>
       </div>
@@ -420,7 +417,7 @@
           </section>
 
           <section class="config-section">
-            <h2>vcsi</h2>
+            <h2>Contact Sheets (vcsi)</h2>
             <p class="hint">vcsi generates contact sheet thumbnails. Grid size controls thumbnail count (4x4 = 16 frames). Timeout is the max time allowed per file.</p>
             <label>Grid Size</label>
             <input type="text" id="cfg-vcs-grid" class="input-short" placeholder="4x4">
@@ -497,7 +494,24 @@
     </main>
   </div>
 
-  <!-- ── MODAL ─────────────────────────────────────────────── -->
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Primary">
+    <button class="bnav-item active" data-page="pending">
+      <span class="bnav-icon">⏳</span><span class="bnav-label">Review</span>
+      <span class="nav-badge" id="bnav-badge-pending"></span></button>
+    <button class="bnav-item" data-page="approved">
+      <span class="bnav-icon">✓</span><span class="bnav-label">Approved</span>
+      <span class="nav-badge approved" id="bnav-badge-approved"></span></button>
+    <button class="bnav-item" data-page="quarantined">
+      <span class="bnav-icon">⚠</span><span class="bnav-label">Quarantine</span>
+      <span class="nav-badge warn" id="bnav-badge-quarantined"></span></button>
+    <button class="bnav-item" data-page="rejected">
+      <span class="bnav-icon">✗</span><span class="bnav-label">Rejected</span>
+      <span class="nav-badge danger" id="bnav-badge-rejected"></span></button>
+    <button class="bnav-item" id="bnav-more" onclick="toggleSidebar()">
+      <span class="bnav-icon">⋯</span><span class="bnav-label">More</span></button>
+  </nav>
+
+  <!-- ── MODAL ─────────────────────────────────────────────────── -->
   <div id="modal-overlay" class="modal-overlay" style="display:none">
     <div class="modal">
       <h2 id="modal-title"></h2>
