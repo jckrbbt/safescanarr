@@ -6,7 +6,7 @@
 - Modern surface system with layered backgrounds, glass panels, depth shadows, and gradient accents
 - Mobile bottom navigation bar with live state badges
 - Skeleton loading grid with shimmer animation
-- Mobile modal bottom sheets, lightbox swipe gestures, and focus trapping
+- Mobile modal bottom sheets, lightbox swipe gestures
 - View-transition-aware page navigation
 - Search-context chip showing origin tab
 - Hero metric and distribution bars on stats dashboard
