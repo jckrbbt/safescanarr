@@ -137,14 +137,17 @@ function renderState(container, kind, opts) {
   container.style.display = "block";
 
   if (kind === "loading") {
-    container.innerHTML =
-      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>' +
-      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>' +
-      '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div></div>';
+    container.classList.add("is-loading");
+    var cards = "";
+    for (var i = 0; i < 8; i++) {
+      cards += '<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>';
+    }
+    container.innerHTML = cards;
     return;
   }
 
   var icons = {empty: "📭", error: "⚠️", search: "🔍"};
+  container.classList.remove("is-loading");
   var icon  = opts.icon || icons[kind] || "";
   var title = opts.title || (kind === "empty" ? "Nothing here" : "Something went wrong");
   var body  = opts.body  || "";
@@ -170,6 +173,7 @@ function clearState(container) {
   if (typeof container === "string") container = document.getElementById(container);
   if (!container) return;
   container.innerHTML = "";
+  container.classList.remove("is-loading");
   container.style.display = "none";
 }
 

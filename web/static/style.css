@@ -417,11 +417,18 @@ textarea:focus-visible,
 .state-title { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: var(--space-2); }
 .state-body  { font-size: 14px; max-width: 500px; margin: 0 auto var(--space-3); line-height: 1.5; }
 
+.state-container.is-loading {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: var(--space-4);
+}
+
 .skeleton-card {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  box-shadow: var(--shadow-1);
 }
 .skeleton-img {
   width: 100%;
@@ -431,12 +438,13 @@ textarea:focus-visible,
   animation: shimmer 1.5s infinite;
 }
 .skeleton-line {
-  height: 14px;
+  height: 12px;
   background: var(--bg3);
   border-radius: 4px;
   margin: 12px var(--space-3);
   width: 60%;
 }
+.skeleton-line.short { width: 38%; }
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
