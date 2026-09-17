@@ -23,7 +23,8 @@ Detection may produce both false positives and false negatives. No automated det
 - Zone-based handling: auto-approve clean content, flag ambiguous content for review, quarantine or reject high-risk content (rejects are quarantined by default; permanent deletion is an separate opt-in)
 - Four-tab UI: Review, Approved, Quarantine, Rejected
 - Quarantine: suspicious files are moved rather than deleted immediately, giving you a chance to review before permanently removing
-- Lightbox viewer with keyboard navigation and per-item actions
+- Lightbox viewer with keyboard navigation and per-item actions, presented as a swipeable bottom sheet on mobile
+- Mobile-friendly UI: bottom navigation with live badges, bottom-sheet modals, 44px touch targets, and keyboard shortcuts
 - Webhook notifications for quarantine and reject events (Discord, Slack, Ntfy, Gotify, Home Assistant, etc.)
 - Arr integration: polls for new imports and blacklists rejected content
 - Scheduled scans as a safety net for anything missed

@@ -3,23 +3,33 @@
 ## 1.0.6 (UI refinement)
 
 ### Added
-- Modern surface system with layered backgrounds, glass panels, depth shadows, and gradient accents
-- Mobile bottom navigation bar with live state badges
-- Skeleton loading grid with shimmer animation
-- Mobile modal bottom sheets, lightbox swipe gestures
-- View-transition-aware page navigation
-- Search-context chip showing origin tab
-- Hero metric and distribution bars on stats dashboard
+- Modern surface system: layered surfaces with depth, glass topbar and bottom navigation, and restrained gradient accents
+- Mobile bottom navigation bar with live per-tab badges and thumb-reachable tab switching
+- Mobile bottom sheets for modals, folder browser, and the lightbox, with swipe navigation and swipe-to-close in the lightbox
+- Typography scale with tabular numerals for counts and percentages, plus tighter mobile content density
+- Stats dashboard: hero metric, state distribution bars, and detail panels (auto vs manual, review quality)
+- Motion system: pop-in modals, sheet slide-up panels, view-transition tab changes, with `prefers-reduced-motion` respected
+- Search-context chip showing the origin tab during searches
+- Skeleton loading grid of card-shaped shimmers replacing the full-width loading slab
 - Empty-state rendering for logs and all tabs
 
+### Fixed
+- Lightbox panel was off-screen on desktop and unusable on mobile; it is now a two-pane layout on desktop and a bottom sheet with reachable actions on phones
+- Mobile topbar overflowed horizontally at small widths; controls now fit at 320 to 900px
+- Config page checkbox and toggle labels were stuck in all caps; they now render sentence case while section eyebrow labels stay uppercase
+- Selected cards were invisible on flagged items; selection now shows a visible accent outline
+- Card titles hid up to half of long filenames; titles now truncate with an ellipsis
+- Inputs used 13 to 14px fonts, triggering iOS Safari zoom on focus; mobile inputs are 16px
+- Viewport correctness: safe-area insets, dvh heights, overscroll behavior, and tap-highlight cleanup
+
 ### Changed
-- Unified responsive breakpoint at 900px; removed unused CSS breakpoint custom properties
-- Risk-low tier now uses the accent colour instead of green
-- Mobile touch targets raised to 44px; inputs use 16px font to prevent iOS zoom
-- Card titles truncate, selected cards get visible focus ring, flagged cards softened
-- Search field uses CSS icon instead of emoji placeholder
+- Mobile touch targets raised to a 44px minimum
+- Unified responsive breakpoints at 900px and 600px; removed invalid breakpoint custom properties
+- Risk-low tier now uses the accent colour instead of approval green
+- Help shortcut `?` now opens the shortcut sheet (Shift+/ previously never triggered it)
 - Login/setup pages polished with safe-area support and larger tap targets
 - Config form widened; input rows flex correctly on all widths
+- Search field icon drawn in CSS instead of an emoji placeholder
 
 ## 1.0.5
 
