@@ -362,7 +362,8 @@ function renderTab(tab) {
       nsfwOverlay +
       imgHtml +
       '<div class="sheet-info">' +
-        '<div class="sheet-name">' + confBadge + escapeHtml(sheet.stem) + '</div>' +
+        '<div class="sheet-name">' + confBadge +
+          '<span class="sheet-title-text">' + escapeHtml(sheet.stem) + '</span></div>' +
         labelBreakdown +
         '<div class="sheet-path" title="' + srcPath + '">' + escapeHtml(sheet.source_path || "Unknown") + '</div>' +
         renderActions(tab, idx, sheet) +
@@ -719,7 +720,8 @@ async function onGlobalSearch() {
         (showNsfw ? '<div class="flagged-overlay">⚠ NSFW</div>' : "") +
         imgHtml2 +
         '<div class="sheet-info">' +
-          '<div class="sheet-name">' + confBadge + escapeHtml(sheet.stem) + '</div>' +
+          '<div class="sheet-name">' + confBadge +
+          '<span class="sheet-title-text">' + escapeHtml(sheet.stem) + '</span></div>' +
           '<div class="sheet-path" title="' + srcPath2 + '">' + escapeHtml(sheet.source_path || "Unknown") + '</div>' +
           renderActions(sec.tab, idx, sheet) +
         '</div>';

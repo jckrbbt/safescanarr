@@ -512,12 +512,24 @@ textarea:focus-visible,
 }
 
 .sheet-name {
-  font-weight: 600;
-  font-size: 13px;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: normal;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  margin-bottom: 4px;
+}
+
+.sheet-name .risk-badge { flex: 0 0 auto; margin-right: 0; }
+
+.sheet-title-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 4px;
+  white-space: nowrap;
+  direction: ltr;
 }
 
 .sheet-path {
@@ -944,15 +956,23 @@ textarea.input-full { resize: vertical; }
 
 /* ── Sheet card selection ─────────────────────────────────────── */
 .sheet-card.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(108,140,255,.3);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--border-strong);
+  box-shadow: var(--glow-accent);
 }
+
+.sheet-card.flagged.selected { outline-color: var(--accent); }
 
 .sheet-select {
   position: absolute;
   top: var(--space-2);
   left: var(--space-2);
   z-index: 10;
+  background: rgba(6,7,12,.55);
+  border-radius: var(--radius-sm);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
 }
 
 .sheet-checkbox {
@@ -1145,21 +1165,23 @@ textarea.input-full { resize: vertical; }
 
 /* ── Flagged cards ────────────────────────────────────────────── */
 .sheet-card.flagged {
-  border-color: var(--danger);
-  box-shadow: 0 0 0 2px rgba(248,113,113,.3);
+  border-color: rgba(248,113,113,.5);
+  box-shadow: var(--shadow-1);
 }
 
 .flagged-overlay {
   position: absolute;
   top: 0; left: 0; right: 0;
-  background: rgba(248,113,113,.85);
+  background: linear-gradient(rgba(248,113,113,.92), rgba(248,113,113,.66));
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
   color: #fff;
-  font-size: var(--font-sm);
+  font-size: var(--fs-xs);
   font-weight: 700;
   text-align: center;
-  padding: 4px;
+  padding: 5px;
   z-index: 5;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
 }
 
 .flag-badge {
