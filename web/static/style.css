@@ -46,9 +46,20 @@
   --space-6: 32px;
 
   /* Typography */
-  --font-sm: 12px;
-  --font-md: 14px;
-  --font-lg: 16px;
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-base: 14px;
+  --fs-lg: clamp(15px, 1.1vw, 16px);
+  --fs-xl: clamp(19px, 2.2vw, 22px);
+  --fs-2xl: clamp(24px, 3.2vw, 30px);
+  --fs-3xl: clamp(28px, 5vw, 38px);
+  --font-sm: var(--fs-sm);
+  --font-md: var(--fs-base);
+  --font-lg: var(--fs-lg);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'DejaVu Sans Mono', monospace;
 
   /* Radius */
   --radius-sm: 6px;
@@ -85,8 +96,9 @@ html { height: 100%; overflow: hidden; font-size: 15px; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: var(--font-md);
+  -webkit-font-smoothing: antialiased;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -373,7 +385,22 @@ textarea:focus-visible,
   gap: var(--space-3);
 }
 
-.page-header h1 { font-size: 22px; font-weight: 700; }
+.page-header h1 { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -.02em; }
+
+.stat-value, .lb-risk-score { letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.risk-badge, .nav-badge, .pag-info, .stat-row-value, .lb-counter,
+.stat-label-count { font-variant-numeric: tabular-nums; }
+.sheet-name { font-weight: 650; letter-spacing: -.01em; }
+
+@media (max-width: 900px) {
+  .content { padding: var(--space-3) var(--space-3) calc(58px + var(--safe-b) + var(--space-4)); }
+  .page-header { margin-bottom: var(--space-3); gap: var(--space-2); }
+  .page-header h1 { font-size: var(--fs-lg); }
+  .review-toolbar { padding: var(--space-2) 0; gap: var(--space-2); }
+  .pagination-bar { gap: var(--space-2); margin-bottom: var(--space-3); }
+  .pagination-bar .pag-info { order: 3; width: 100%; text-align: center; margin: 0; }
+  .header-actions .badge { display: none; }
+}
 
 .header-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 
@@ -544,7 +571,7 @@ textarea:focus-visible,
   color: var(--text);
   padding: 8px var(--space-3);
   font-size: 13px;
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-family: var(--font-mono);
 }
 
 .input-short {
@@ -622,7 +649,7 @@ textarea.input-full { resize: vertical; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   color: var(--text-dim);
 }
@@ -672,7 +699,7 @@ textarea.input-full { resize: vertical; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-4);
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   line-height: 1.7;
   max-height: 75vh;
@@ -1576,7 +1603,7 @@ textarea.input-full { resize: vertical; }
 }
 .folder-row-path {
   flex: 1;
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   white-space: nowrap;
   overflow: hidden;
@@ -1608,7 +1635,7 @@ textarea.input-full { resize: vertical; }
   max-height: 80vh;
 }
 .folder-browser-path {
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-sm);
   color: var(--text);
   background: var(--bg3);
@@ -1733,7 +1760,7 @@ textarea.input-full { resize: vertical; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
-  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 14px;
   word-break: break-all;
   margin-bottom: var(--space-2);
@@ -1791,7 +1818,7 @@ textarea.input-full { resize: vertical; }
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 6px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
