@@ -112,20 +112,27 @@ document.addEventListener("DOMContentLoaded", function() {
 
 // ── Navigation ────────────────────────────────────────────────────
 function navigateTo(page) {
-  currentTab = page;
-  document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
-  document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
-  document.querySelectorAll(".bnav-item").forEach(function(b) { b.classList.remove("active"); });
-  var pageEl = document.getElementById("page-" + page);
-  var linkEl = document.querySelector(".sidebar-link[data-page='" + page + "']");
-  var bnEl   = document.querySelector(".bnav-item[data-page='" + page + "']");
-  if (pageEl) pageEl.classList.add("active");
-  if (linkEl) linkEl.classList.add("active");
-  if (bnEl) bnEl.classList.add("active");
-  if (TABS.includes(page)) loadPage(page);
-  if (page === "config")   loadConfig();
-  if (page === "logs")     loadLogs();
-  if (page === "stats")    loadStatsPage();
+  function applyNav() {
+    currentTab = page;
+    document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
+    document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
+    document.querySelectorAll(".bnav-item").forEach(function(b) { b.classList.remove("active"); });
+    var pageEl = document.getElementById("page-" + page);
+    var linkEl = document.querySelector(".sidebar-link[data-page='" + page + "']");
+    var bnEl   = document.querySelector(".bnav-item[data-page='" + page + "']");
+    if (pageEl) pageEl.classList.add("active");
+    if (linkEl) linkEl.classList.add("active");
+    if (bnEl) bnEl.classList.add("active");
+    if (TABS.includes(page)) loadPage(page);
+    if (page === "config")   loadConfig();
+    if (page === "logs")     loadLogs();
+    if (page === "stats")    loadStatsPage();
+  }
+  if (document.startViewTransition && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.startViewTransition(function() { applyNav(); });
+  } else {
+    applyNav();
+  }
 }
 
 // ── State system ──────────────────────────────────────────────────
@@ -268,12 +275,18 @@ function riskClass(confidence) {
   return "risk-high";
 }
 
+function riskColor(pct) {
+  if (pct >= 75) return "var(--danger)";
+  if (pct >= 40) return "var(--warn)";
+  return "var(--accent)";
+}
+
 function riskBadge(confidence, reason, isApproved) {
   if (confidence == null) return "";
   var pct = Math.round(confidence * 100);
   var tip = reason ? escapeHtml(reason) : (pct === 0 ? "No risk detected" : "NSFW detected");
   var cls = isApproved ? "risk-badge-clean" : riskClass(confidence);
-  var meterColor = isApproved ? "var(--text-dim)" : (pct >= 75 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--accent2)");
+  var meterColor = isApproved ? "var(--text-dim)" : riskColor(pct);
   return '<span class="risk-badge ' + cls + '" title="' + tip + '">' +
            pct + '% risk' +
            '<span class="risk-meter" aria-hidden="true"><span class="risk-meter-bar" style="width:' + pct + '%;background:' + meterColor + '"></span></span>' +
@@ -1204,6 +1217,10 @@ async function loadLogs() {
     var res   = await apiFetch("/api/logs?lines=" + lines + "&level=" + level);
     var data  = await res.json();
     var out   = document.getElementById("log-output");
+    if (!data.lines || data.lines.length === 0) {
+      out.innerHTML = '<div class="state"><div class="state-icon">📭</div><div class="state-title">No logs yet</div><div class="state-body">Run a scan or wait for background tasks to produce log output.</div></div>';
+      return;
+    }
     out.innerHTML = data.lines.map(function(line) {
       var cls = "log-info";
       if (line.indexOf("[ERROR]") >= 0)   cls = "log-error";
@@ -1293,7 +1310,7 @@ function buildLightboxContent(lb, src, tab, idx) {
   if (sheet && sheet.nsfw_confidence) {
     var pct   = Math.round(sheet.nsfw_confidence * 100);
     var cls   = riskClass(sheet.nsfw_confidence);
-    var color = pct >= 75 ? "var(--danger)" : pct >= 40 ? "var(--warn)" : "var(--accent2)";
+    var color = riskColor(pct);
     confHtml  = '<div class="lb-risk"><div class="lb-risk-score ' + cls + '" style="color:' + color + '">' + pct + '%</div><div class="lb-risk-label">confidence</div></div>';
   }
 
