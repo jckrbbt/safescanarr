@@ -497,7 +497,24 @@
     </main>
   </div>
 
-  <!-- ── MODAL ─────────────────────────────────────────────── -->
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Primary">
+    <button class="bnav-item active" data-page="pending">
+      <span class="bnav-icon">⏳</span><span class="bnav-label">Review</span>
+      <span class="nav-badge" id="bnav-badge-pending"></span></button>
+    <button class="bnav-item" data-page="approved">
+      <span class="bnav-icon">✓</span><span class="bnav-label">Approved</span>
+      <span class="nav-badge approved" id="bnav-badge-approved"></span></button>
+    <button class="bnav-item" data-page="quarantined">
+      <span class="bnav-icon">⚠</span><span class="bnav-label">Quarantine</span>
+      <span class="nav-badge warn" id="bnav-badge-quarantined"></span></button>
+    <button class="bnav-item" data-page="rejected">
+      <span class="bnav-icon">✗</span><span class="bnav-label">Rejected</span>
+      <span class="nav-badge danger" id="bnav-badge-rejected"></span></button>
+    <button class="bnav-item" id="bnav-more" onclick="toggleSidebar()">
+      <span class="bnav-icon">⋯</span><span class="bnav-label">More</span></button>
+  </nav>
+
+  <!-- ── MODAL ─────────────────────────────────────────────────── -->
   <div id="modal-overlay" class="modal-overlay" style="display:none">
     <div class="modal">
       <h2 id="modal-title"></h2>

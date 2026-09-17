@@ -89,6 +89,11 @@ document.addEventListener("DOMContentLoaded", function() {
     });
   });
 
+  document.querySelectorAll(".bnav-item").forEach(function(btn) {
+    if (btn.id === "bnav-more") return;
+    btn.addEventListener("click", function() { navigateTo(btn.dataset.page); });
+  });
+
   // Restore sidebar state
   try {
     var pref     = localStorage.getItem("sidebarCollapsed");
@@ -110,10 +115,13 @@ function navigateTo(page) {
   currentTab = page;
   document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
   document.querySelectorAll(".sidebar-link").forEach(function(l) { l.classList.remove("active"); });
+  document.querySelectorAll(".bnav-item").forEach(function(b) { b.classList.remove("active"); });
   var pageEl = document.getElementById("page-" + page);
   var linkEl = document.querySelector(".sidebar-link[data-page='" + page + "']");
+  var bnEl   = document.querySelector(".bnav-item[data-page='" + page + "']");
   if (pageEl) pageEl.classList.add("active");
   if (linkEl) linkEl.classList.add("active");
+  if (bnEl) bnEl.classList.add("active");
   if (TABS.includes(page)) loadPage(page);
   if (page === "config")   loadConfig();
   if (page === "logs")     loadLogs();
@@ -183,9 +191,11 @@ async function loadStats() {
     var stats = await res.json();
     TABS.forEach(function(t) {
       var badge = document.getElementById("badge-" + t);
+      var bnav  = document.getElementById("bnav-badge-" + t);
       var count = document.getElementById(t + "-count");
       var n = stats[t] || 0;
       if (badge) badge.textContent = n > 0 ? n : "";
+      if (bnav)  bnav.textContent  = n > 0 ? n : "";
       if (count) count.textContent = n + " item" + (n !== 1 ? "s" : "");
     });
   } catch(e) {}
