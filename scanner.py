@@ -35,6 +35,7 @@ if str(_APP_DIR) not in sys.path:
 from config import Config as _ConfigClass
 from database import Database
 from pathutil import sheet_filename, resolve_sheet
+import webhook
 
 # When run as subprocess from entrypoint, stdout is redirected to the log file
 # by the parent process. Just log to stdout — no FileHandler needed.
@@ -210,10 +211,7 @@ def action_reject(video_path: Path, cfg, db: Database,
 
 def _url_host(url: str) -> str:
     """Hostname only — webhook/arr URLs frequently embed secrets."""
-    try:
-        return urllib.parse.urlsplit(url).hostname or "?"
-    except ValueError:
-        return "?"
+    return webhook.url_host(url)
 
 
 def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
@@ -259,32 +257,14 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
     if url:
         body["url"] = url
 
-    # Adapt the payload to the webhook provider. Discord and Slack reject
-    # unknown JSON bodies (HTTP 400), so send the minimal shape they expect;
-    # generic providers (ntfy JSON publish, Gotify) get the full body.
-    host = _url_host(cfg.WEBHOOK_URL).lower()
-    if host.endswith("discord.com") or host.endswith("discordapp.com"):
-        discord_body: dict = {"content": message}
-        if url:
-            discord_body["embeds"] = [{"title": event_label, "url": url}]
-        payload = json.dumps(discord_body).encode()
-    elif host.endswith("hooks.slack.com"):
-        payload = json.dumps({"text": message}).encode()
-    else:
-        payload = json.dumps(body).encode()
-
-    try:
-        req = urllib.request.Request(
-            cfg.WEBHOOK_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=10)
+    host = webhook.url_host(cfg.WEBHOOK_URL).lower()
+    payload = webhook.build_payload(host, message, event_label, url, body)
+    ok, detail = webhook.send(cfg.WEBHOOK_URL, payload, _ConfigClass.version())
+    if ok:
         log.info("Webhook sent: %s → %s", event, _url_host(cfg.WEBHOOK_URL))
         log.debug("Webhook sent: %s → %s", event, cfg.WEBHOOK_URL)
-    except Exception as e:
-        log.warning("Webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), e)
+    else:
+        log.warning("Webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), detail)
 
 
 def _api_request(url: str, api_key: str, method: str = "GET", body: dict = None):

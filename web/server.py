@@ -46,6 +46,7 @@ if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 import config as config_module
+import webhook
 from web import auth
 from config import Config
 from database import Database
@@ -757,29 +758,33 @@ def api_test_webhook():
     cfg = Config()
     if not cfg.WEBHOOK_URL:
         return jsonify({"status": "error", "message": "No webhook URL set"}), 400
-    title = "Example (2024)"
+
+    message = "Safe Scanarr test notification"
+    event_label = "Test notification"
+    url = ""
+    if cfg.WEB_UI_URL:
+        url = f"{cfg.WEB_UI_URL.rstrip('/')}/?tab=quarantined"
+
     body = {
         "event":     "test",
-        "path":      f"/mnt/media/Movies/{title}/{title}.mp4",
-        "title":     title,
-        "risk":      0.75,
-        "labels":    ["FEMALE_BREAST_EXPOSED"],
-        "message":   f"Quarantined: {title} (risk: 75%)",
+        "path":      "/mnt/media/Movies/Example (2024)/Example (2024).mp4",
+        "title":     "Example (2024)",
+        "risk":      0.0,
+        "labels":    [],
+        "message":   message,
         "timestamp": datetime.datetime.now().isoformat(),
     }
-    if cfg.WEB_UI_URL:
-        body["url"] = f"{cfg.WEB_UI_URL.rstrip('/')}/?tab=quarantined"
-    payload = json.dumps(body).encode()
-    try:
-        req = urllib.request.Request(
-            cfg.WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json"}, method="POST"
-        )
-        urllib.request.urlopen(req, timeout=10)
+    if url:
+        body["url"] = url
+
+    host = webhook.url_host(cfg.WEBHOOK_URL).lower()
+    payload = webhook.build_payload(host, message, event_label, url, body)
+    ok, detail = webhook.send(cfg.WEBHOOK_URL, payload, Config.version())
+    if ok:
         return jsonify({"status": "ok"})
-    except Exception as e:
-        log.warning("Test webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), e)
-        return jsonify({"status": "error", "message": "Webhook delivery failed"}), 502
+
+    log.warning("Test webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), detail)
+    return jsonify({"status": "error", "message": detail}), 502
 
 
 @app.route("/api/db/clean", methods=["POST"])
