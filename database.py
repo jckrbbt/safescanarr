@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS files (
     flag_reason       TEXT,
     nsfw_confidence   REAL,
     quarantine_path   TEXT,
+    source_retained   INTEGER NOT NULL DEFAULT 0,
     state_updated_at  TEXT,
     state_source      TEXT,
     updated_at        TEXT NOT NULL
@@ -70,6 +71,7 @@ MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN quarantine_path TEXT",
     "ALTER TABLE files ADD COLUMN state_updated_at TEXT",
     "ALTER TABLE files ADD COLUMN state_source TEXT",
+    "ALTER TABLE files ADD COLUMN source_retained INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -125,15 +127,17 @@ class Database:
                     status: str = "ok", review_state: str = "pending",
                     flagged: bool = False, flag_reason: Optional[str] = None,
                     nsfw_confidence: Optional[float] = None,
-                    state_source: str = "auto") -> None:
+                    state_source: str = "auto",
+                    source_retained: bool = False) -> None:
         now = datetime.now(timezone.utc).isoformat()
         is_new = self.get_file(path) is None
         self._con.execute(
             """
             INSERT INTO files
               (path, name, size, mtime, status, review_state, flagged,
-               flag_reason, nsfw_confidence, state_source, updated_at, state_updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               flag_reason, nsfw_confidence, state_source, source_retained,
+               updated_at, state_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 name             = excluded.name,
                 size             = excluded.size,
@@ -144,11 +148,13 @@ class Database:
                 flag_reason      = excluded.flag_reason,
                 nsfw_confidence  = excluded.nsfw_confidence,
                 state_source     = excluded.state_source,
+                source_retained  = excluded.source_retained,
                 updated_at       = excluded.updated_at,
                 state_updated_at = excluded.state_updated_at
             """,
             (path, name, size, mtime, status, review_state,
-             int(flagged), flag_reason, nsfw_confidence, state_source, now, now),
+             int(flagged), flag_reason, nsfw_confidence, state_source,
+             int(source_retained), now, now),
         )
         self._con.commit()
         if is_new:
@@ -160,15 +166,24 @@ class Database:
 
     def set_review_state(self, path: str, state: str,
                          quarantine_path: Optional[str] = None,
-                         source: str = "user") -> None:
+                         source: str = "user",
+                         source_retained: Optional[bool] = None) -> None:
         prev_row   = self.get_file(path)
         prev_state = prev_row["review_state"] if prev_row else None
         now = datetime.now(timezone.utc).isoformat()
-        self._con.execute(
-            """UPDATE files SET review_state = ?, quarantine_path = ?,
-               state_updated_at = ?, state_source = ? WHERE path = ?""",
-            (state, quarantine_path, now, source, path)
-        )
+        if source_retained is None:
+            self._con.execute(
+                """UPDATE files SET review_state = ?, quarantine_path = ?,
+                   state_updated_at = ?, state_source = ? WHERE path = ?""",
+                (state, quarantine_path, now, source, path)
+            )
+        else:
+            self._con.execute(
+                """UPDATE files SET review_state = ?, quarantine_path = ?,
+                   source_retained = ?, state_updated_at = ?, state_source = ?
+                   WHERE path = ?""",
+                (state, quarantine_path, int(source_retained), now, source, path)
+            )
         self._con.commit()
         if state != prev_state and state in ("approved", "quarantined", "rejected"):
             self._bump_lifetime(f"{state}_{source or 'user'}")

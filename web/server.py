@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-safescanarr/web/server.py v1.0.8
+safescanarr/web/server.py v1.0.9
 
 Auth model
 ----------
@@ -50,6 +50,7 @@ import webhook
 from web import auth
 from config import Config
 from database import Database
+from fileops import COPIED_SOURCE_KEPT, MOVED, relocate, looks_deletable
 from pathutil import is_within, resolve_sheet
 
 log = logging.getLogger(__name__)
@@ -456,6 +457,7 @@ def api_sheets():
             "updated_at":      row["updated_at"],
             "size":            row["size"],
             "state_source":    row["state_source"] if "state_source" in row.keys() else None,
+            "source_retained": row["source_retained"] if "source_retained" in row.keys() else False,
         })
 
     return jsonify(sheets)
@@ -480,20 +482,45 @@ def api_approve():
     db  = get_db()
     cfg = Config()
     done = []
+    failed = []
     for stem in stems:
         row = db.find_file_by_stem(stem)
         if not row:
+            failed.append((stem, "not found"))
             continue
         # If currently quarantined, move video back
         if row["review_state"] == "quarantined" and row["quarantine_path"]:
             q_path = Path(row["quarantine_path"])
             orig   = Path(row["path"])
-            if q_path.exists():
-                orig.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(q_path), str(orig))
-                log.info("Restored from quarantine: %s", orig)
-        db.set_review_state(row["path"], "approved")
+            source_retained = ("source_retained" in row.keys() and bool(row["source_retained"]))
+            if source_retained and q_path.exists():
+                # Source was never removed; just delete the quarantine copy.
+                try:
+                    if q_path.stat().st_size != orig.stat().st_size:
+                        failed.append((stem, "quarantine copy size mismatch"))
+                        continue
+                    q_path.unlink()
+                    log.info("Approved source-retained item; removed quarantine copy: %s", q_path)
+                except OSError as e:
+                    failed.append((stem, f"could not remove quarantine copy: {e.strerror}"))
+                    continue
+                db.set_review_state(row["path"], "approved", quarantine_path=None,
+                                    source_retained=False)
+            elif q_path.exists():
+                try:
+                    relocate(q_path, orig, verify=True)
+                    log.info("Restored from quarantine: %s", orig)
+                except OSError as e:
+                    errno_name = __import__("errno").errorcode.get(e.errno, "EUNKNOWN")
+                    failed.append((stem, f"Could not restore {stem}: {errno_name}"))
+                    continue
+            db.set_review_state(row["path"], "approved")
+        else:
+            db.set_review_state(row["path"], "approved")
         done.append(stem)
+    if failed:
+        return jsonify({"status": "error", "approved": done,
+                        "failed": [f for f in failed]}), 409
     return jsonify({"status": "ok", "approved": done})
 
 
@@ -515,39 +542,75 @@ def api_reject():
     db  = get_db()
     cfg = Config()
     done = []
+    failed = []
     for stem in stems:
         row = db.find_file_by_stem(stem)
         if not row:
+            failed.append((stem, "not found"))
             continue
 
         source_path = row["path"]
         video_path  = Path(row["quarantine_path"] or row["path"])
 
-        if cfg.DELETE_ON_REJECT:
-            if video_path.exists():
-                video_path.unlink()
-                log.warning("Rejected (deleted): %s", video_path)
-            # Blacklist so the arr stack does not re-import the release
-            _blacklist_path(source_path, cfg)
-            db.set_review_state(source_path, "rejected")
-        else:
-            if row["review_state"] == "quarantined" and row["quarantine_path"]:
-                q_path = Path(row["quarantine_path"])   # already quarantined
-            elif video_path.exists():
+        try:
+            if cfg.DELETE_ON_REJECT:
+                deleted = False
+                if video_path.exists():
+                    try:
+                        video_path.unlink()
+                        deleted = True
+                        log.warning("Rejected (deleted): %s", video_path)
+                    except OSError as e:
+                        from fileops import RETAIN_ERRNOS
+                        if e.errno not in RETAIN_ERRNOS:
+                            raise
+                        log.warning("Reject delete failed for %s, copying to quarantine: %s",
+                                    source_path, e)
+                if deleted or not video_path.exists():
+                    _blacklist_path(source_path, cfg)
+                    db.set_review_state(source_path, "rejected")
+                    done.append(stem)
+                    continue
+                # Could not delete source: fall through to a quarantine copy.
                 q_dir = Path(cfg.QUARANTINE_DIR)
-                q_dir.mkdir(parents=True, exist_ok=True)
-                q_path = q_dir / video_path.name
-                if q_path.exists():
-                    q_path = q_dir / f"{video_path.stem}_{int(datetime.datetime.now().timestamp())}{video_path.suffix}"
-                shutil.move(str(video_path), str(q_path))
-                log.warning("Rejected (quarantined, delete_on_reject=false): %s -> %s",
+                q_path, outcome = relocate(video_path, q_dir / video_path.name, verify=True)
+                source_retained = outcome == COPIED_SOURCE_KEPT
+                log.warning("Rejected (quarantined, source retained): %s -> %s",
                             source_path, q_path)
+                db.set_review_state(source_path, "quarantined",
+                                    quarantine_path=str(q_path),
+                                    source_retained=source_retained)
             else:
-                q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
-            db.set_review_state(source_path, "quarantined",
-                                quarantine_path=str(q_path) if q_path else None)
+                if row["review_state"] == "quarantined" and row["quarantine_path"]:
+                    q_path = Path(row["quarantine_path"])   # already quarantined
+                    db.set_review_state(source_path, "quarantined",
+                                        quarantine_path=str(q_path))
+                elif video_path.exists():
+                    q_dir = Path(cfg.QUARANTINE_DIR)
+                    q_path, outcome = relocate(video_path, q_dir / video_path.name, verify=True)
+                    source_retained = outcome == COPIED_SOURCE_KEPT
+                    if source_retained:
+                        log.warning("Rejected (quarantined, source retained): %s -> %s",
+                                    source_path, q_path)
+                    else:
+                        log.warning("Rejected (quarantined, delete_on_reject=false): %s -> %s",
+                                    source_path, q_path)
+                    db.set_review_state(source_path, "quarantined",
+                                        quarantine_path=str(q_path),
+                                        source_retained=source_retained)
+                else:
+                    q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
+                    db.set_review_state(source_path, "quarantined",
+                                        quarantine_path=str(q_path) if q_path else None)
+        except OSError as e:
+            errno_name = __import__("errno").errorcode.get(e.errno, "EUNKNOWN")
+            failed.append((stem, f"Could not process {stem}: {errno_name}"))
+            continue
 
         done.append(stem)
+    if failed:
+        return jsonify({"status": "error", "rejected": done,
+                        "failed": [f for f in failed]}), 409
     return jsonify({"status": "ok", "rejected": done,
                     "mode": "delete" if cfg.DELETE_ON_REJECT else "quarantine"})
 
@@ -566,14 +629,17 @@ def api_quarantine():
     if not video_path.exists():
         return jsonify({"status": "error", "message": "Source file not found"}), 404
 
-    q_dir  = Path(cfg.QUARANTINE_DIR)
-    q_dir.mkdir(parents=True, exist_ok=True)
-    q_path = q_dir / video_path.name
-    if q_path.exists():
-        q_path = q_dir / f"{video_path.stem}_{int(datetime.datetime.now().timestamp())}{video_path.suffix}"
-    shutil.move(str(video_path), str(q_path))
-    db.set_review_state(row["path"], "quarantined", quarantine_path=str(q_path))
-    return jsonify({"status": "ok", "quarantine_path": str(q_path)})
+    try:
+        q_dir  = Path(cfg.QUARANTINE_DIR)
+        q_path, outcome = relocate(video_path, q_dir / video_path.name, verify=True)
+        source_retained = outcome == COPIED_SOURCE_KEPT
+        db.set_review_state(row["path"], "quarantined", quarantine_path=str(q_path),
+                            source_retained=source_retained)
+        return jsonify({"status": "ok", "quarantine_path": str(q_path)})
+    except OSError as e:
+        errno_name = __import__("errno").errorcode.get(e.errno, "EUNKNOWN")
+        log.warning("Manual quarantine failed for %s: %s", stem, e)
+        return jsonify({"status": "error", "message": f"Could not quarantine {stem}: {errno_name}"}), 409
 
 
 @app.route("/api/sheets/requeue", methods=["POST"])

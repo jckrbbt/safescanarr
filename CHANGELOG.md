@@ -1,5 +1,16 @@
 # Safe Scanarr Changelog
 
+## 1.0.9
+
+### Fixed
+- Scan no longer crashes when quarantining/rejecting a file on a cross-device, non-writable media mount. Undeletable sources are now copied into quarantine, marked as "source retained" in the database and UI, and the scan continues.
+- Quarantine copies are now atomic (written to `.sspart` beside the destination and then `os.replace()`-d) and size-verified before the source is unlinked, preventing interrupted copies from becoming the only copy.
+- Added a UI chip "Copied - source still in place" for retained items in the Quarantine tab and lightbox, plus a tab hint explaining that the source file is still in the library.
+- Blacklist / re-search is now gated: it only fires when the arr library file has actually been removed (MOVED outcome or verified deletion). When the source is retained, the action is skipped and logged clearly.
+- Per-file error isolation in `run_scan`: an unexpected failure while processing a single file records an error, inserts a DB row with `status='error'`, `review_state='pending'`, and `flagged=1`, and the scan continues. The next scan retries error rows.
+- `run_scan` now cleans up `scan_pid` in a `try/finally` block and prints final counts including errors and retained copies.
+- Manual API actions (approve/reject/quarantine) now route through `fileops.relocate` and surface clear 409 JSON errors instead of crashing with 500 when the underlying move fails.
+
 ## 1.0.8
 
 ### Fixed

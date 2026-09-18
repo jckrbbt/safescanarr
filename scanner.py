@@ -17,7 +17,6 @@ import argparse
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import urllib.error
@@ -34,6 +33,7 @@ if str(_APP_DIR) not in sys.path:
 
 from config import Config as _ConfigClass
 from database import Database
+from fileops import COPIED_SOURCE_KEPT, MOVED, relocate
 from pathutil import sheet_filename, resolve_sheet
 import webhook
 
@@ -158,55 +158,107 @@ def determine_state(max_conf: float, cfg) -> str:
 # State actions
 # ---------------------------------------------------------------------------
 
+_SOURCE_RETAINED_WARNED = False
+
+
+def _warn_source_retained_once(directory: Path) -> None:
+    """Log a one-per-scan warning that tells the operator source files remain."""
+    global _SOURCE_RETAINED_WARNED
+    if _SOURCE_RETAINED_WARNED:
+        return
+    _SOURCE_RETAINED_WARNED = True
+    log.warning(
+        "Quarantined content remains in the library because the source file "
+        "could not be removed (directory %s is not writable/deletable). "
+        "Give the container user write+delete access on the media mount, or "
+        "accept that SafeScanarr will keep full-size copies in quarantine.",
+        directory,
+    )
+
+
 def action_quarantine(video_path: Path, cfg, db: Database,
-                      abs_path: str, nudenet_result: dict) -> str:
-    """Move video to quarantine folder. Returns new quarantine path."""
+                      abs_path: str, nudenet_result: dict) -> tuple[str, str]:
+    """Move video to quarantine folder. Returns (new quarantine path, outcome)."""
     q_dir = Path(cfg.QUARANTINE_DIR)
-    q_dir.mkdir(parents=True, exist_ok=True)
-    q_path = q_dir / video_path.name
-    # Avoid name collision
-    if q_path.exists():
-        stem = video_path.stem
-        suffix = video_path.suffix
-        q_path = q_dir / f"{stem}_{int(datetime.now().timestamp())}{suffix}"
-    shutil.move(str(video_path), str(q_path))
-    log.warning("QUARANTINED: %s → %s", abs_path, q_path)
+    q_path, outcome = relocate(video_path, q_dir / video_path.name)
+    if outcome == MOVED:
+        log.warning("QUARANTINED: %s → %s", abs_path, q_path)
+    else:
+        log.warning("QUARANTINED (COPIED, SOURCE NOT REMOVED): %s → %s", abs_path, q_path)
+        _warn_source_retained_once(video_path.parent)
     _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
-    return str(q_path)
+    return str(q_path), outcome
 
 
 def action_reject(video_path: Path, cfg, db: Database,
                   abs_path: str, nudenet_result: dict,
                   sheet_path: Path = None,
-                  from_quarantine: bool = False) -> str | None:
+                  from_quarantine: bool = False) -> tuple[str | None, str]:
     """Carry out a reject verdict.
 
     Safe by default: the video is moved to quarantine and the quarantine path is
     returned. Permanent deletion (plus the arr blacklist / re-search flow) only
     happens when the operator has explicitly enabled ``delete_on_reject``; in
     that case the video is removed and None is returned.
+
+    Returns (quarantine_path_or_None, outcome) where outcome is one of the
+    fileops MOVED / COPIED_SOURCE_KEPT constants.
     """
+    from fileops import RETAIN_ERRNOS
     if cfg.DELETE_ON_REJECT:
         target = video_path
+        deleted = False
         if target.exists():
-            target.unlink()
-            log.warning("REJECTED (deleted): %s", target)
-        # Sheet is intentionally kept — hidden in UI until user clicks to reveal
-        _send_webhook(cfg, "rejected", abs_path, nudenet_result)
-        _blacklist(abs_path, cfg)
-        return None
+            try:
+                target.unlink()
+                log.warning("REJECTED (deleted): %s", target)
+                deleted = True
+            except OSError as e:
+                if e.errno not in RETAIN_ERRNOS:
+                    raise
+                log.warning(
+                    "REJECTED (delete failed, copying to quarantine): %s: %s",
+                    target, e,
+                )
+        # Fire reject webhook / blacklist only when the source is actually gone.
+        if deleted or not target.exists():
+            _send_webhook(cfg, "rejected", abs_path, nudenet_result)
+            _blacklist(abs_path, cfg)
+            return None, MOVED
+        else:
+            # Source still exists (read-only/cross-device): quarantine-copy it.
+            q_dir = Path(cfg.QUARANTINE_DIR)
+            q_path, outcome = relocate(video_path, q_dir / video_path.name, verify=True)
+            if outcome == COPIED_SOURCE_KEPT:
+                log.warning(
+                    "REJECTED (quarantined, source retained): %s → %s",
+                    abs_path, q_path,
+                )
+                _warn_source_retained_once(video_path.parent)
+            else:
+                log.warning(
+                    "REJECTED (quarantined, delete_on_reject=false): %s → %s",
+                    abs_path, q_path,
+                )
+            _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
+            return str(q_path), outcome
 
     # Quarantine-only (default) mode
     q_dir = Path(cfg.QUARANTINE_DIR)
-    q_dir.mkdir(parents=True, exist_ok=True)
-    q_path = q_dir / video_path.name
-    if q_path.exists():
-        q_path = q_dir / f"{video_path.stem}_{int(datetime.now().timestamp())}{video_path.suffix}"
-    if video_path.exists():
-        shutil.move(str(video_path), str(q_path))
-        log.warning("REJECTED (quarantined, delete_on_reject=false): %s → %s", abs_path, q_path)
+    q_path, outcome = relocate(video_path, q_dir / video_path.name, verify=True)
+    if outcome == COPIED_SOURCE_KEPT:
+        log.warning(
+            "REJECTED (quarantined, source retained): %s → %s",
+            abs_path, q_path,
+        )
+        _warn_source_retained_once(video_path.parent)
+    else:
+        log.warning(
+            "REJECTED (quarantined, delete_on_reject=false): %s → %s",
+            abs_path, q_path,
+        )
     _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
-    return str(q_path)
+    return str(q_path), outcome
 
 
 def _url_host(url: str) -> str:
@@ -457,27 +509,54 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
     log.info("[%s] NSFW confidence=%.2f → state=%s", source, max_conf, state)
 
     quarantine_path = None
+    source_retained = False
+    outcome = MOVED
 
-    if state == "quarantined":
-        quarantine_path = action_quarantine(video, cfg, db, abs_path, nudenet_result)
+    try:
+        if state == "quarantined":
+            quarantine_path, outcome = action_quarantine(
+                video, cfg, db, abs_path, nudenet_result
+            )
 
-    elif state == "rejected":
-        quarantine_path = action_reject(video, cfg, db, abs_path, nudenet_result,
-                                        sheet_path=sheet_path)
-        if quarantine_path:
-            # Safe mode: the video is now in quarantine, awaiting review.
-            db.upsert_file(abs_path, name, size, mtime, status="ok",
-                           review_state="quarantined", flagged=True,
-                           flag_reason=flag_reason, nsfw_confidence=max_conf)
-            db.set_review_state(abs_path, "quarantined",
-                                quarantine_path=quarantine_path, source="auto")
-        else:
-            db.upsert_file(abs_path, name, size, mtime, status="ok",
-                           review_state="rejected", flagged=True,
-                           flag_reason=flag_reason, nsfw_confidence=max_conf)
+        elif state == "rejected":
+            quarantine_path, outcome = action_reject(
+                video, cfg, db, abs_path, nudenet_result, sheet_path=sheet_path
+            )
+            if quarantine_path:
+                # Safe mode: the video is now in quarantine, awaiting review.
+                source_retained = outcome == COPIED_SOURCE_KEPT
+                db.upsert_file(
+                    abs_path, name, size, mtime, status="ok",
+                    review_state="quarantined", flagged=True,
+                    flag_reason=flag_reason, nsfw_confidence=max_conf,
+                    source_retained=source_retained
+                )
+                db.set_review_state(
+                    abs_path, "quarantined",
+                    quarantine_path=quarantine_path, source="auto",
+                    source_retained=source_retained,
+                )
+            else:
+                db.upsert_file(abs_path, name, size, mtime, status="ok",
+                               review_state="rejected", flagged=True,
+                               flag_reason=flag_reason, nsfw_confidence=max_conf)
+            return
+
+    except OSError:
+        log.exception("Quarantine/reject failed for %s", abs_path)
+        db.record_error(abs_path, "quarantine/reject failed")
+        db.upsert_file(
+            abs_path, name, size, mtime,
+            status="error",
+            review_state="pending",
+            flagged=(max_conf >= cfg.ZONE_QUARANTINE),
+            flag_reason=flag_reason or None,
+            nsfw_confidence=max_conf if max_conf > 0 else None,
+        )
         return
 
     # 4. Save to DB
+    source_retained = outcome == COPIED_SOURCE_KEPT
     db.upsert_file(
         abs_path, name, size, mtime,
         status="ok",
@@ -485,9 +564,14 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
         flagged=(max_conf >= cfg.ZONE_QUARANTINE),
         flag_reason=flag_reason or None,
         nsfw_confidence=max_conf if max_conf > 0 else None,
+        source_retained=source_retained,
     )
     if quarantine_path:
-        db.set_review_state(abs_path, "quarantined", quarantine_path=quarantine_path, source="auto")
+        db.set_review_state(
+            abs_path, "quarantined",
+            quarantine_path=quarantine_path, source="auto",
+            source_retained=source_retained,
+        )
 
     # Fire review webhook if item landed in pending
     if state == "pending":
@@ -508,6 +592,10 @@ def _stop_requested(db: Database) -> bool:
 
 
 def run_scan(db: Database) -> None:
+    """Run a full scan, isolating per-file failures and cleaning up pid state."""
+    global _SOURCE_RETAINED_WARNED
+    _SOURCE_RETAINED_WARNED = False
+
     cfg = _ConfigClass()
     log.info("=== Full scan started ===")
 
@@ -516,57 +604,105 @@ def run_scan(db: Database) -> None:
     db.set_scan_pid(os.getpid())
 
     counts = {"new": 0, "changed": 0, "skipped": 0, "error": 0}
+    retained_count = 0
 
-    for folder in cfg.WATCH_FOLDERS:
-        folder = Path(folder)
-        log.info("Scanning folder: %s", folder)
-        for video in scan_folder(folder):
-            # Check for stop signal between files
-            if _stop_requested(db):
-                log.info("=== Scan stop requested — stopping after current file ===")
-                log.info("=== Scan stopped — new:%d changed:%d skipped:%d ===",
-                         counts["new"], counts["changed"], counts["skipped"])
-                return
+    try:
+        for folder in cfg.WATCH_FOLDERS:
+            folder = Path(folder)
+            log.info("Scanning folder: %s", folder)
+            for video in scan_folder(folder):
+                # Check for stop signal between files
+                if _stop_requested(db):
+                    log.info("=== Scan stop requested — stopping after current file ===")
+                    log.info("=== Scan stopped — new:%d changed:%d skipped:%d errors:%d ===",
+                             counts["new"], counts["changed"], counts["skipped"], counts["error"])
+                    return
 
-            name, size, mtime = file_fingerprint(video)
-            abs_path = str(video.resolve())
-            existing = db.get_file(abs_path)
+                abs_path = None
+                name, size, mtime = None, None, None
+                try:
+                    name, size, mtime = file_fingerprint(video)
+                    abs_path = str(video.resolve())
+                    existing = db.get_file(abs_path)
 
-            if existing is None:
-                process_one(video, db, "scan")
-                counts["new"] += 1
-            else:
-                changed = (size != existing["size"] or
-                           abs(mtime - existing["mtime"]) > 1)
-                if changed:
-                    process_one(video, db, "scan")
-                    counts["changed"] += 1
-                elif existing["status"] == "error":
-                    process_one(video, db, "scan")
-                else:
-                    counts["skipped"] += 1
+                    if existing is None:
+                        process_one(video, db, "scan")
+                        counts["new"] += 1
+                    else:
+                        changed = (size != existing["size"] or
+                                   abs(mtime - existing["mtime"]) > 1)
+                        if changed:
+                            process_one(video, db, "scan")
+                            counts["changed"] += 1
+                        elif existing["status"] == "error":
+                            process_one(video, db, "scan")
+                        else:
+                            counts["skipped"] += 1
+                except Exception:
+                    log.exception("Unexpected error processing %s", video)
+                    counts["error"] += 1
+                    if abs_path is None:
+                        try:
+                            name, size, mtime = file_fingerprint(video)
+                            abs_path = str(video.resolve())
+                        except Exception:
+                            name, size, mtime = video.name, 0, 0.0
+                            abs_path = str(video)
+                    db.record_error(abs_path, "unexpected processing error")
+                    db.upsert_file(
+                        abs_path, name or video.name, size or 0, mtime or 0.0,
+                        status="error",
+                        review_state="pending",
+                        flagged=True,
+                    )
 
-    # Auto-reject stale quarantined items
-    if cfg.QUARANTINE_AUTO_REJECT_DAYS > 0:
-        stale = db.get_stale_quarantined(cfg.QUARANTINE_AUTO_REJECT_DAYS)
-        for row in stale:
-            if not cfg.DELETE_ON_REJECT:
-                log.info("Leaving stale quarantine in place (delete_on_reject=false): %s",
-                         row["path"])
-                continue
-            log.info("Auto-rejecting stale quarantine: %s", row["path"])
-            q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
-            sheet  = resolve_sheet(cfg.OUTPUT_DIR, row["path"])
-            if q_path and q_path.exists():
-                q_path.unlink()
-            if sheet.exists():
-                sheet.unlink()
-            db.set_review_state(row["path"], "rejected", source="auto")
-            _send_webhook(cfg, "rejected", row["path"], {})
+        # Auto-reject stale quarantined items (skip source-retained copies)
+        if cfg.QUARANTINE_AUTO_REJECT_DAYS > 0:
+            stale = db.get_stale_quarantined(cfg.QUARANTINE_AUTO_REJECT_DAYS)
+            copy_retained_stale = 0
+            for row in stale:
+                if "source_retained" in row.keys() and row["source_retained"]:
+                    copy_retained_stale += 1
+                    log.info(
+                        "Skipping stale auto-reject for source-retained copy: %s",
+                        row["path"]
+                    )
+                    continue
+                try:
+                    if not cfg.DELETE_ON_REJECT:
+                        log.info("Leaving stale quarantine in place (delete_on_reject=false): %s",
+                                 row["path"])
+                        continue
+                    log.info("Auto-rejecting stale quarantine: %s", row["path"])
+                    q_path = Path(row["quarantine_path"]) if row["quarantine_path"] else None
+                    sheet  = resolve_sheet(cfg.OUTPUT_DIR, row["path"])
+                    if q_path and q_path.exists():
+                        q_path.unlink()
+                    if sheet.exists():
+                        sheet.unlink()
+                    db.set_review_state(row["path"], "rejected", source="auto")
+                    _send_webhook(cfg, "rejected", row["path"], {})
+                except Exception:
+                    log.exception("Stale auto-reject failed for %s", row["path"])
+                    counts["error"] += 1
+                    db.record_error(row["path"], "stale auto-reject failed")
 
-    db.clear_scan_pid()
-    log.info("=== Scan complete — new:%d changed:%d skipped:%d ===",
-             counts["new"], counts["changed"], counts["skipped"])
+            retained_count = copy_retained_stale
+    finally:
+        db.clear_scan_pid()
+
+    if retained_count == 0:
+        try:
+            retained_count = db._con.execute(
+                "SELECT COUNT(*) AS c FROM files WHERE source_retained = 1"
+            ).fetchone()["c"]
+        except Exception:
+            retained_count = 0
+
+    if retained_count > 0:
+        log.warning("%d file(s) quarantined by copy; sources left in place", retained_count)
+    log.info("=== Scan complete — new:%d changed:%d skipped:%d errors:%d ===",
+             counts["new"], counts["changed"], counts["skipped"], counts["error"])
 
 
 # ---------------------------------------------------------------------------

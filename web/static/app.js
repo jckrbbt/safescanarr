@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.8 ───────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.9 ───────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
@@ -354,6 +354,11 @@ function renderTab(tab) {
       labelBreakdown = '<div class="label-breakdown">' + chips + '</div>';
     }
 
+    var sourceRetainedChip = "";
+    if (sheet.source_retained) {
+      sourceRetainedChip = '<div class="source-retained-chip" title="Source file could not be removed from the library. Approving will delete this quarantine copy.">Copied - source still in place</div>';
+    }
+
     var imgHtml = '<div class="sheet-img-placeholder">No sheet</div>';
     if (sheet.has_sheet) {
       var src = "/api/sheets/image/" + encodeURIComponent(sheet.filename);
@@ -378,6 +383,7 @@ function renderTab(tab) {
         '<div class="sheet-name">' + confBadge +
           '<span class="sheet-title-text">' + escapeHtml(sheet.stem) + '</span></div>' +
         labelBreakdown +
+        sourceRetainedChip +
         '<div class="sheet-path" title="' + srcPath + '">' + escapeHtml(sheet.source_path || "Unknown") + '</div>' +
         renderActions(tab, idx, sheet) +
       '</div>';
@@ -416,8 +422,9 @@ function renderActions(tab, idx, sheet) {
       '</div>';
   }
   if (tab === "quarantined") {
+    var approveLabel = sheet.source_retained ? 'Approve (delete copy)' : 'Restore';
     return '<div class="sheet-actions">' +
-      '<button class="btn btn-success btn-sm" onclick="singleAction(\'quarantined\',\'approve\',' + idx + ')">✓ Restore</button>' +
+      '<button class="btn btn-success btn-sm" onclick="singleAction(\'quarantined\',\'approve\',' + idx + ')">✓ ' + escapeHtml(approveLabel) + '</button>' +
       '<button class="btn btn-danger btn-sm" onclick="confirmSingle(\'quarantined\',\'reject\',' + idx + ')">✗ Delete</button>' +
       '</div>';
   }
@@ -1346,8 +1353,9 @@ function buildLightboxContent(lb, src, tab, idx) {
       '<button class="btn btn-danger lb-action" data-action="reject">✗ Reject</button>' +
       '</div>';
   } else if (tab === "quarantined" && idx != null) {
+    var lbApproveLabel = sheet.source_retained ? 'Approve (delete copy)' : 'Restore';
     actionsHtml = '<div class="lb-actions">' +
-      '<button class="btn btn-success lb-action" data-action="approve">✓ Restore</button>' +
+      '<button class="btn btn-success lb-action" data-action="approve">' + escapeHtml(lbApproveLabel) + '</button>' +
       '<button class="btn btn-danger lb-action" data-action="reject">✗ Delete</button>' +
       '</div>';
   }
