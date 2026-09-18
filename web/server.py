@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-safescanarr/web/server.py v1.0.6
+safescanarr/web/server.py v1.0.7
 
 Auth model
 ----------
