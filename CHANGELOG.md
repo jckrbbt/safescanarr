@@ -1,5 +1,10 @@
 # Safe Scanarr Changelog
 
+## 1.0.7
+
+### Fixed
+- Discord and Slack webhooks returned HTTP 400 because the payload was a generic JSON event body those services reject. Discord URLs now receive `content`/`embeds`, Slack URLs receive `text`; ntfy and Gotify keep the full event body.
+
 ## 1.0.6 (UI refinement)
 
 ### Added
