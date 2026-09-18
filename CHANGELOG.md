@@ -1,5 +1,12 @@
 # Safe Scanarr Changelog
 
+## 1.0.8
+
+### Fixed
+- Discord webhooks failed with HTTP 403 because urllib's default `Python-urllib/3.x` User-Agent is blocked by Cloudflare in front of `discord.com`. All webhook POSTs now send an explicit `SafeScanarr/<version>` User-Agent.
+- The UI "Test Webhook" button never received the v1.0.7 provider-specific payload fix and still sent the generic JSON body; it now routes through the same `build_payload`/`send` path used by scanner webhooks and returns the provider's response status/body in the error detail.
+- Webhook failures now log the response body (truncated to ~300 characters) instead of a generic exception so operators can diagnose rejected deliveries without exposing the URL/token.
+
 ## 1.0.7
 
 ### Fixed
