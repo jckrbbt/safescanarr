@@ -258,7 +258,20 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
     }
     if url:
         body["url"] = url
-    payload = json.dumps(body).encode()
+
+    # Adapt the payload to the webhook provider. Discord and Slack reject
+    # unknown JSON bodies (HTTP 400), so send the minimal shape they expect;
+    # generic providers (ntfy JSON publish, Gotify) get the full body.
+    host = _url_host(cfg.WEBHOOK_URL).lower()
+    if host.endswith("discord.com") or host.endswith("discordapp.com"):
+        discord_body: dict = {"content": message}
+        if url:
+            discord_body["embeds"] = [{"title": event_label, "url": url}]
+        payload = json.dumps(discord_body).encode()
+    elif host.endswith("hooks.slack.com"):
+        payload = json.dumps({"text": message}).encode()
+    else:
+        payload = json.dumps(body).encode()
 
     try:
         req = urllib.request.Request(
