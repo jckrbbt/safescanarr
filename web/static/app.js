@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.6 ───────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.7 ───────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
