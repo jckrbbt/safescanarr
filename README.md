@@ -26,7 +26,7 @@ Detection may produce both false positives and false negatives. No automated det
 - Lightbox viewer with keyboard navigation and per-item actions, presented as a swipeable bottom sheet on mobile
 - Mobile-friendly UI: bottom navigation with live badges, bottom-sheet modals, 44px touch targets, and keyboard shortcuts
 - Webhook notifications for quarantine and reject events (Discord, Slack, Ntfy, Gotify, Home Assistant, etc.)
-- Arr integration: polls for new imports and blacklists rejected content
+- Arr integration: polls for new imports and blocklists rejected releases by marking the original grab as failed (requires `delete_on_reject`)
 - Scheduled scans as a safety net for anything missed
 - Docker: single container, runs alongside your existing stack
 
@@ -155,6 +155,14 @@ docker compose up -d --build
 ```
 
 The database migrates automatically on startup. No manual steps required.
+
+---
+
+## Limitations
+
+- Arr blocklisting requires `delete_on_reject` to be enabled and only works for releases that were grabbed (not manually imported) and whose grabbed history still exists in the arr.
+- Manually imported files and releases whose history has been trimmed cannot be blocklisted automatically.
+- A different indexer's copy of the same content can still be returned by an arr search; Safe Scanarr only blocks the specific rejected release.
 
 ---
 

@@ -9,6 +9,7 @@ review_state values:
   rejected    — confirmed bad; video deleted, sheet deleted
 """
 
+import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN state_updated_at TEXT",
     "ALTER TABLE files ADD COLUMN state_source TEXT",
     "ALTER TABLE files ADD COLUMN source_retained INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE files ADD COLUMN arr_result TEXT",
 ]
 
 
@@ -190,6 +192,14 @@ class Database:
 
     def delete_file(self, path: str) -> None:
         self._con.execute("DELETE FROM files WHERE path = ?", (path,))
+        self._con.commit()
+
+    def set_arr_result(self, path: str, reports: list) -> None:
+        """Persist the arr reject-flow report dicts as JSON."""
+        self._con.execute(
+            "UPDATE files SET arr_result = ? WHERE path = ?",
+            (json.dumps(reports), path)
+        )
         self._con.commit()
 
     def list_files(self, review_state: str = None) -> list:

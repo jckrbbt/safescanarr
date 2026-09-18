@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.9 ───────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.10 ──────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
@@ -560,7 +560,14 @@ async function performAction(action, stems) {
   var res4  = await apiFetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stems:stems})});
   var data4 = await res4.json();
   var labels = {approve:"Approved ✓", reject:"Rejected ✗"};
-  toast(res4.ok ? (labels[action] || "Done") + " (" + stems.length + ")" : "Error: " + (data4.message || "unknown"), !res4.ok);
+  if (res4.ok) {
+    toast((labels[action] || "Done") + " (" + stems.length + ")");
+    if (data4.warnings && data4.warnings.length) {
+      data4.warnings.forEach(function(w) { toast(w, true); });
+    }
+  } else {
+    toast("Error: " + (data4.message || "unknown"), true);
+  }
 }
 
 // ── Scan ──────────────────────────────────────────────────────────
@@ -914,6 +921,10 @@ function fillConfigForm(cfg) {
   document.getElementById("cfg-quarantine-days").value      = cfg.quarantine_auto_reject_days != null ? cfg.quarantine_auto_reject_days : 0;
   var dor = document.getElementById("cfg-delete-on-reject");
   if (dor) dor.checked = !!cfg.delete_on_reject;
+  var abl = document.getElementById("cfg-arr-blocklist-on-reject");
+  if (abl) abl.checked = cfg.arr_blocklist_on_reject != null ? !!cfg.arr_blocklist_on_reject : true;
+  var asr = document.getElementById("cfg-arr-search-after-reject");
+  if (asr) asr.checked = cfg.arr_search_after_reject != null ? !!cfg.arr_search_after_reject : true;
   document.getElementById("cfg-polling-enabled").checked    = !!cfg.polling_enabled;
   document.getElementById("cfg-poll-interval").value        = cfg.poll_interval_seconds || 600;
   document.getElementById("cfg-sonarr-url").value           = cfg.sonarr_url          || "";
@@ -981,6 +992,8 @@ async function saveConfig() {
     quarantine_dir:              document.getElementById("cfg-quarantine-dir").value.trim(),
     quarantine_auto_reject_days: parseInt(document.getElementById("cfg-quarantine-days").value),
     delete_on_reject:            !!((document.getElementById("cfg-delete-on-reject") || {}).checked),
+    arr_blocklist_on_reject:     !!((document.getElementById("cfg-arr-blocklist-on-reject") || {}).checked),
+    arr_search_after_reject:     !!((document.getElementById("cfg-arr-search-after-reject") || {}).checked),
     polling_enabled:             document.getElementById("cfg-polling-enabled").checked,
     poll_interval_seconds:       parseInt(document.getElementById("cfg-poll-interval").value),
     sonarr_url:                  document.getElementById("cfg-sonarr-url").value.trim(),

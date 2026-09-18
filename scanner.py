@@ -9,7 +9,7 @@ State machine:
   conf ≥ zone_auto_reject             → rejected
 
 Rejected items are *moved to quarantine* by default; permanent deletion (and
-the arr blacklist/re-search flow) only happens when the operator explicitly
+the arr blocklist/re-search flow) only happens when the operator explicitly
 sets ``delete_on_reject`` to true in the config.
 """
 
@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Derive the app directory from this file so the code works from any checkout
 # location (and keeps working for existing /opt/safescanarr installs).
@@ -31,6 +32,7 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+import arr
 from config import Config as _ConfigClass
 from database import Database
 from fileops import COPIED_SOURCE_KEPT, MOVED, relocate
@@ -193,16 +195,17 @@ def action_quarantine(video_path: Path, cfg, db: Database,
 def action_reject(video_path: Path, cfg, db: Database,
                   abs_path: str, nudenet_result: dict,
                   sheet_path: Path = None,
-                  from_quarantine: bool = False) -> tuple[str | None, str]:
+                  from_quarantine: bool = False) -> tuple[str | None, str, list]:
     """Carry out a reject verdict.
 
     Safe by default: the video is moved to quarantine and the quarantine path is
-    returned. Permanent deletion (plus the arr blacklist / re-search flow) only
+    returned. Permanent deletion (plus the arr reject / re-search flow) only
     happens when the operator has explicitly enabled ``delete_on_reject``; in
     that case the video is removed and None is returned.
 
-    Returns (quarantine_path_or_None, outcome) where outcome is one of the
-    fileops MOVED / COPIED_SOURCE_KEPT constants.
+    Returns (quarantine_path_or_None, outcome, reports) where outcome is one of
+    the fileops MOVED / COPIED_SOURCE_KEPT constants and reports is the list of
+    arr reject-flow reports (empty if the arr flow did not run).
     """
     from fileops import RETAIN_ERRNOS
     if cfg.DELETE_ON_REJECT:
@@ -220,11 +223,13 @@ def action_reject(video_path: Path, cfg, db: Database,
                     "REJECTED (delete failed, copying to quarantine): %s: %s",
                     target, e,
                 )
-        # Fire reject webhook / blacklist only when the source is actually gone.
+        # Fire reject webhook / arr reject only when the source is actually gone.
         if deleted or not target.exists():
-            _send_webhook(cfg, "rejected", abs_path, nudenet_result)
-            _blacklist(abs_path, cfg)
-            return None, MOVED
+            reports = []
+            if cfg.ARR_BLOCKLIST_ON_REJECT or cfg.ARR_SEARCH_AFTER_REJECT:
+                reports = arr.reject_in_arr(abs_path, cfg, delete_file_in_arr=True)
+            _send_webhook(cfg, "rejected", abs_path, nudenet_result, reports=reports)
+            return None, MOVED, reports
         else:
             # Source still exists (read-only/cross-device): quarantine-copy it.
             q_dir = Path(cfg.QUARANTINE_DIR)
@@ -241,7 +246,7 @@ def action_reject(video_path: Path, cfg, db: Database,
                     abs_path, q_path,
                 )
             _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
-            return str(q_path), outcome
+            return str(q_path), outcome, []
 
     # Quarantine-only (default) mode
     q_dir = Path(cfg.QUARANTINE_DIR)
@@ -258,7 +263,7 @@ def action_reject(video_path: Path, cfg, db: Database,
             abs_path, q_path,
         )
     _send_webhook(cfg, "quarantined", abs_path, nudenet_result)
-    return str(q_path), outcome
+    return str(q_path), outcome, []
 
 
 def _url_host(url: str) -> str:
@@ -266,7 +271,8 @@ def _url_host(url: str) -> str:
     return webhook.url_host(url)
 
 
-def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
+def _send_webhook(cfg, event: str, path: str, nudenet_result: dict,
+                  reports: Optional[list] = None) -> None:
     if not cfg.WEBHOOK_URL:
         return
     if event == "review"      and not cfg.WEBHOOK_ON_REVIEW:
@@ -286,6 +292,13 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
         "rejected":    "Rejected",
     }.get(event, event.capitalize())
     message = f"{event_label}: {title} (risk: {round(risk * 100)}%)"
+
+    # Surface arr blocklist failures in the human-readable message
+    if reports:
+        for r in reports:
+            if r.get("blocklisted") is False:
+                message += f" - {r['service'].capitalize()} blocklist FAILED"
+                break
 
     # Deep-link to the relevant tab in the Safe Scanarr UI, if a base URL is configured.
     tab_for_event = {
@@ -308,6 +321,8 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
     }
     if url:
         body["url"] = url
+    if reports:
+        body["arr"] = reports
 
     host = webhook.url_host(cfg.WEBHOOK_URL).lower()
     payload = webhook.build_payload(host, message, event_label, url, body)
@@ -317,139 +332,6 @@ def _send_webhook(cfg, event: str, path: str, nudenet_result: dict) -> None:
         log.debug("Webhook sent: %s → %s", event, cfg.WEBHOOK_URL)
     else:
         log.warning("Webhook failed (host=%s): %s", _url_host(cfg.WEBHOOK_URL), detail)
-
-
-def _api_request(url: str, api_key: str, method: str = "GET", body: dict = None):
-    """Make an API request and return parsed JSON or None on failure."""
-    data    = json.dumps(body).encode() if body else None
-    headers = {"X-Api-Key": api_key, "Accept": "application/json"}
-    if data:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            raw = r.read()
-            return json.loads(raw) if raw else {}
-    except Exception as e:
-        log.warning("Arr API request failed: method=%s host=%s error=%s",
-                    method, _url_host(url), e)
-        return None
-
-
-def _blacklist(file_path: str, cfg) -> None:
-    """
-    Full removal flow for each configured service:
-      1. Find the episode/movie file ID by matching path
-      2. Delete the file from the library
-      3. Blacklist the release to prevent re-download
-      4. Trigger a new search for a replacement
-    """
-    for service in ("sonarr", "radarr"):
-        base    = cfg.SONARR_URL.rstrip("/") if service == "sonarr" else cfg.RADARR_URL.rstrip("/")
-        api_key = cfg.SONARR_API_KEY        if service == "sonarr" else cfg.RADARR_API_KEY
-        if not api_key:
-            continue
-        try:
-            if service == "sonarr":
-                _arr_remove_sonarr(base, api_key, file_path)
-            else:
-                _arr_remove_radarr(base, api_key, file_path)
-        except Exception as e:
-            log.warning("Arr removal failed for %s: %s", service, e)
-
-
-def _arr_remove_sonarr(base: str, api_key: str, file_path: str) -> None:
-    # Step 1: Find episode file ID matching path
-    ep_files = _api_request(f"{base}/api/v3/episodefile", api_key) or []
-    ep_file_id  = None
-    episode_id  = None
-    series_id   = None
-    release_group = None
-
-    for ef in ep_files:
-        if ef.get("path", "") == file_path:
-            ep_file_id    = ef.get("id")
-            series_id     = ef.get("seriesId")
-            release_group = ef.get("releaseGroup", "")
-            # Get episode ID from the file's episodes
-            eps = ef.get("episodeFileId") or []
-            break
-
-    if not ep_file_id:
-        log.warning("Sonarr: no episode file found for %s", file_path)
-        return
-
-    # Step 2: Get episode IDs for this file
-    episodes = _api_request(
-        f"{base}/api/v3/episode?seriesId={series_id}&episodeFileId={ep_file_id}",
-        api_key
-    ) or []
-    episode_ids = [e["id"] for e in episodes if "id" in e]
-
-    # Step 3: Delete the file from Sonarr library
-    result = _api_request(f"{base}/api/v3/episodefile/{ep_file_id}", api_key, method="DELETE")
-    log.info("Sonarr: deleted episodefile %d", ep_file_id)
-
-    # Step 4: Blacklist via history
-    history = _api_request(
-        f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3",
-        api_key
-    ) or {}
-    for record in history.get("records", []):
-        if (record.get("data") or {}).get("importedPath", "") == file_path:
-            _api_request(
-                f"{base}/api/v3/blacklist/{record['id']}",
-                api_key, method="DELETE"
-            )
-            log.info("Sonarr: blacklisted history record %d", record["id"])
-            break
-
-    # Step 5: Trigger new search
-    if episode_ids:
-        _api_request(f"{base}/api/v3/command", api_key, method="POST",
-                     body={"name": "EpisodeSearch", "episodeIds": episode_ids})
-        log.info("Sonarr: triggered EpisodeSearch for episode ids %s", episode_ids)
-
-
-def _arr_remove_radarr(base: str, api_key: str, file_path: str) -> None:
-    # Step 1: Find movie file ID matching path
-    movie_files = _api_request(f"{base}/api/v3/moviefile", api_key) or []
-    movie_file_id = None
-    movie_id      = None
-
-    for mf in movie_files:
-        if mf.get("path", "") == file_path:
-            movie_file_id = mf.get("id")
-            movie_id      = mf.get("movieId")
-            break
-
-    if not movie_file_id:
-        log.warning("Radarr: no movie file found for %s", file_path)
-        return
-
-    # Step 2: Delete the file from Radarr library
-    _api_request(f"{base}/api/v3/moviefile/{movie_file_id}", api_key, method="DELETE")
-    log.info("Radarr: deleted moviefile %d", movie_file_id)
-
-    # Step 3: Blacklist via history
-    history = _api_request(
-        f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3",
-        api_key
-    ) or {}
-    for record in history.get("records", []):
-        if (record.get("data") or {}).get("importedPath", "") == file_path:
-            _api_request(
-                f"{base}/api/v3/blacklist/{record['id']}",
-                api_key, method="DELETE"
-            )
-            log.info("Radarr: blacklisted history record %d", record["id"])
-            break
-
-    # Step 4: Trigger new search
-    if movie_id:
-        _api_request(f"{base}/api/v3/command", api_key, method="POST",
-                     body={"name": "MoviesSearch", "movieIds": [movie_id]})
-        log.info("Radarr: triggered MoviesSearch for movie id %d", movie_id)
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +401,7 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
             )
 
         elif state == "rejected":
-            quarantine_path, outcome = action_reject(
+            quarantine_path, outcome, reports = action_reject(
                 video, cfg, db, abs_path, nudenet_result, sheet_path=sheet_path
             )
             if quarantine_path:
@@ -540,6 +422,8 @@ def process_one(video: Path, db: Database, source: str = "manual") -> None:
                 db.upsert_file(abs_path, name, size, mtime, status="ok",
                                review_state="rejected", flagged=True,
                                flag_reason=flag_reason, nsfw_confidence=max_conf)
+                if reports:
+                    db.set_arr_result(abs_path, reports)
             return
 
     except OSError:
@@ -680,8 +564,13 @@ def run_scan(db: Database) -> None:
                         q_path.unlink()
                     if sheet.exists():
                         sheet.unlink()
+                    reports = []
+                    if cfg.ARR_BLOCKLIST_ON_REJECT or cfg.ARR_SEARCH_AFTER_REJECT:
+                        reports = arr.reject_in_arr(row["path"], cfg, delete_file_in_arr=True)
                     db.set_review_state(row["path"], "rejected", source="auto")
-                    _send_webhook(cfg, "rejected", row["path"], {})
+                    if reports:
+                        db.set_arr_result(row["path"], reports)
+                    _send_webhook(cfg, "rejected", row["path"], {}, reports=reports)
                 except Exception:
                     log.exception("Stale auto-reject failed for %s", row["path"])
                     counts["error"] += 1

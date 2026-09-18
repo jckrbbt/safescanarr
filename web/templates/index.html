@@ -345,6 +345,24 @@
               </label>
             </div>
             <p class="hint" style="color:var(--warn)">Off by default. When off, rejecting an item moves the video to quarantine instead of deleting it. Turn this on only if you want rejects deleted immediately.</p>
+
+            <div class="toggle-row" style="margin-top:16px">
+              <label class="toggle-label">Blocklist rejected release in arr</label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="cfg-arr-blocklist-on-reject">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <p class="hint">Marks the original grab as failed so the release is not re-downloaded. Requires delete on reject.</p>
+
+            <div class="toggle-row" style="margin-top:16px">
+              <label class="toggle-label">Search for replacement after reject</label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="cfg-arr-search-after-reject">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <p class="hint">Triggers a manual episode/movie search unless the arr already queued an automatic re-download.</p>
           </section>
 
           <section class="config-section">

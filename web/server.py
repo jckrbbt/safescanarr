@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-safescanarr/web/server.py v1.0.9
+safescanarr/web/server.py v1.0.10
 
 Auth model
 ----------
@@ -45,6 +45,7 @@ _APP_DIR = Path(__file__).resolve().parent.parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+import arr
 import config as config_module
 import webhook
 from web import auth
@@ -529,7 +530,7 @@ def api_reject():
     """Reject one or more sheets.
 
     Safe by default: the video is *moved to quarantine*. Permanent deletion
-    (plus the arr blacklist/re-search flow) only happens when the config flag
+    (plus the arr blocklist/re-search flow) only happens when the config flag
     ``delete_on_reject`` is explicitly enabled.
     """
     data  = request.get_json() or {}
@@ -543,6 +544,8 @@ def api_reject():
     cfg = Config()
     done = []
     failed = []
+    all_reports = []
+    warnings = []
     for stem in stems:
         row = db.find_file_by_stem(stem)
         if not row:
@@ -567,7 +570,16 @@ def api_reject():
                         log.warning("Reject delete failed for %s, copying to quarantine: %s",
                                     source_path, e)
                 if deleted or not video_path.exists():
-                    _blacklist_path(source_path, cfg)
+                    reports = []
+                    if cfg.ARR_BLOCKLIST_ON_REJECT or cfg.ARR_SEARCH_AFTER_REJECT:
+                        reports = arr.reject_in_arr(source_path, cfg, delete_file_in_arr=True)
+                    if reports:
+                        db.set_arr_result(source_path, reports)
+                        all_reports.extend(reports)
+                        for r in reports:
+                            if r.get("blocklisted") is False:
+                                service = r.get("service", "arr").capitalize()
+                                warnings.append(f"{service} blocklist failed: {r.get('reason') or 'unknown'}")
                     db.set_review_state(source_path, "rejected")
                     done.append(stem)
                     continue
@@ -608,11 +620,21 @@ def api_reject():
             continue
 
         done.append(stem)
+    response = {
+        "status": "ok",
+        "rejected": done,
+        "mode": "delete" if cfg.DELETE_ON_REJECT else "quarantine",
+    }
+    if all_reports:
+        response["arr"] = all_reports
+    if warnings:
+        response["warnings"] = warnings
     if failed:
         return jsonify({"status": "error", "rejected": done,
-                        "failed": [f for f in failed]}), 409
-    return jsonify({"status": "ok", "rejected": done,
-                    "mode": "delete" if cfg.DELETE_ON_REJECT else "quarantine"})
+                        "failed": [f for f in failed],
+                        "arr": all_reports,
+                        "warnings": warnings}), 409
+    return jsonify(response)
 
 
 @app.route("/api/sheets/quarantine", methods=["POST"])
@@ -669,12 +691,14 @@ _CONFIG_KEYS = {
     "polling_enabled", "poll_interval_seconds", "scan_schedule_enabled", "scan_schedule",
     "detection_profile", "zone_auto_approve", "zone_quarantine", "zone_auto_reject",
     "nudenet_frames", "nudenet_threshold", "quarantine_dir",
-    "quarantine_auto_reject_days", "delete_on_reject", "webhook_url",
-    "webhook_on_review", "webhook_on_quarantine", "webhook_on_reject", "web_ui_url",
-    "vcs_grid", "vcsi_timeout_seconds",
+    "quarantine_auto_reject_days", "delete_on_reject",
+    "arr_blocklist_on_reject", "arr_search_after_reject",
+    "webhook_url", "webhook_on_review", "webhook_on_quarantine", "webhook_on_reject",
+    "web_ui_url", "vcs_grid", "vcsi_timeout_seconds",
 }
 _CONFIG_BOOLS = {
     "polling_enabled", "scan_schedule_enabled", "delete_on_reject",
+    "arr_blocklist_on_reject", "arr_search_after_reject",
     "webhook_on_review", "webhook_on_quarantine", "webhook_on_reject",
 }
 _CONFIG_INTS = {
@@ -1249,75 +1273,6 @@ def _api_delete(url: str, api_key: str):
     except Exception as e:
         log.warning("API DELETE failed: host=%s error=%s", _url_host(url), e)
         return False
-
-
-def _blacklist_path(file_path: str, cfg: Config) -> None:
-    """Full removal flow: delete from library, blacklist, trigger new search."""
-    for service in ("sonarr", "radarr"):
-        base    = cfg.SONARR_URL.rstrip("/") if service == "sonarr" else cfg.RADARR_URL.rstrip("/")
-        api_key = cfg.SONARR_API_KEY        if service == "sonarr" else cfg.RADARR_API_KEY
-        if not api_key:
-            continue
-        try:
-            if service == "sonarr":
-                # Find episode file
-                ep_files = _api_get(f"{base}/api/v3/episodefile", api_key) or []
-                ep_file_id = None
-                series_id  = None
-                for ef in ep_files:
-                    if ef.get("path", "") == file_path:
-                        ep_file_id = ef.get("id")
-                        series_id  = ef.get("seriesId")
-                        break
-                if not ep_file_id:
-                    continue
-                # Get episode IDs
-                episodes   = _api_get(f"{base}/api/v3/episode?seriesId={series_id}&episodeFileId={ep_file_id}", api_key) or []
-                episode_ids = [e["id"] for e in episodes if "id" in e]
-                # Delete from library
-                _api_delete(f"{base}/api/v3/episodefile/{ep_file_id}", api_key)
-                log.info("Sonarr: deleted episodefile %d", ep_file_id)
-                # Blacklist history record
-                history = _api_get(f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3", api_key) or {}
-                for record in history.get("records", []):
-                    if (record.get("data") or {}).get("importedPath", "") == file_path:
-                        _api_delete(f"{base}/api/v3/blacklist/{record['id']}", api_key)
-                        log.info("Sonarr: blacklisted record %d", record["id"])
-                        break
-                # Trigger new search
-                if episode_ids:
-                    _api_post(f"{base}/api/v3/command", api_key, {"name": "EpisodeSearch", "episodeIds": episode_ids})
-                    log.info("Sonarr: triggered EpisodeSearch for %s", episode_ids)
-
-            else:  # radarr
-                # Find movie file
-                movie_files = _api_get(f"{base}/api/v3/moviefile", api_key) or []
-                movie_file_id = None
-                movie_id      = None
-                for mf in movie_files:
-                    if mf.get("path", "") == file_path:
-                        movie_file_id = mf.get("id")
-                        movie_id      = mf.get("movieId")
-                        break
-                if not movie_file_id:
-                    continue
-                # Delete from library
-                _api_delete(f"{base}/api/v3/moviefile/{movie_file_id}", api_key)
-                log.info("Radarr: deleted moviefile %d", movie_file_id)
-                # Blacklist history record
-                history = _api_get(f"{base}/api/v3/history?pageSize=100&sortKey=date&sortDirection=descending&eventType=3", api_key) or {}
-                for record in history.get("records", []):
-                    if (record.get("data") or {}).get("importedPath", "") == file_path:
-                        _api_delete(f"{base}/api/v3/blacklist/{record['id']}", api_key)
-                        log.info("Radarr: blacklisted record %d", record["id"])
-                        break
-                # Trigger new search
-                if movie_id:
-                    _api_post(f"{base}/api/v3/command", api_key, {"name": "MoviesSearch", "movieIds": [movie_id]})
-                    log.info("Radarr: triggered MoviesSearch for movie %d", movie_id)
-
-        except Exception as e:
-            log.warning("Arr removal failed for %s/%s: %s", service, file_path, e)
 
 
 if __name__ == "__main__":

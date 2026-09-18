@@ -1,5 +1,15 @@
 # Safe Scanarr Changelog
 
+## 1.0.10
+
+### Fixed
+- Arr blocklisting never worked: the old flow called `GET /api/v3/episodefile` and `GET /api/v3/moviefile` without the required `seriesId`/`movieId` parameters, which current Sonarr/Radarr v4 reject with HTTP 400, and it tried to remove blocklist entries via `DELETE /api/v3/blacklist/{historyId}`, a route that does not exist in API v3. Replaced the entire flow with the correct `POST /api/v3/history/failed/{grabbedHistoryId}` endpoint using the grabbed record (eventType=1), followed by a mandatory read-back verification against the blocklist endpoint.
+- Arr reject failures are no longer silent: the result of each arr service call is persisted in the database (`arr_result`), included in webhook payloads, and returned by the API reject endpoint with `warnings` so the UI can surface them.
+- Added `arr_blocklist_on_reject` and `arr_search_after_reject` config toggles (default true) and wired them through `config.py`, the web config API, and the UI.
+
+### Changed
+- README arr feature line now describes the new behavior and includes a Limitations note about manually imported files, trimmed history, and duplicate content from other indexers.
+
 ## 1.0.9
 
 ### Fixed

@@ -52,6 +52,8 @@ _DEFAULTS = {
     "quarantine_dir":          "",    # empty = BASE_DIR/quarantine
     "quarantine_auto_reject_days": 0, # 0 = never auto-reject, >0 = reject after N days
     "delete_on_reject":        False, # False = safe quarantine-only reject mode
+    "arr_blocklist_on_reject": True,  # mark the original grab as failed
+    "arr_search_after_reject": True,  # trigger a manual search if not auto-queued
     # Webhook
     "webhook_url":             "",
     "webhook_on_review":       False,
@@ -150,6 +152,8 @@ def _load() -> dict:
         "quarantine_dir":        "",
         "quarantine_auto_reject_days": 0,
         "delete_on_reject":      False,
+        "arr_blocklist_on_reject": True,
+        "arr_search_after_reject": True,
         "webhook_url":           "",
         "webhook_on_review":     False,
         "webhook_on_quarantine": True,
@@ -233,6 +237,9 @@ class Config:
         # Safe-by-default reject behaviour: move to quarantine unless explicitly
         # opted in to permanent deletion.
         self.DELETE_ON_REJECT        = bool(cfg.get("delete_on_reject", False))
+        # Arr reject flow
+        self.ARR_BLOCKLIST_ON_REJECT = bool(cfg.get("arr_blocklist_on_reject", True))
+        self.ARR_SEARCH_AFTER_REJECT = bool(cfg.get("arr_search_after_reject", True))
         # Webhook
         self.WEBHOOK_URL             = cfg.get("webhook_url", "")
         self.WEBHOOK_ON_REVIEW       = cfg.get("webhook_on_review", False)
