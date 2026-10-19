@@ -68,6 +68,11 @@ _DEFAULTS = {
     "auth_password_hash":      "",
     "auth_method":             "",
     "session_secret":          "",
+    # Sessions: session_epoch bumps sign out every device; remember_me_days
+    # controls the "Remember me" lifetime (0 disables it). config.json-only —
+    # no env overrides; changes take effect after a server restart.
+    "session_epoch":           0,
+    "remember_me_days":        30,
 }
 
 # Env vars that override the corresponding config key for secrets.
@@ -107,8 +112,15 @@ def _apply_env_secrets(cfg: dict) -> dict:
     return cfg
 
 
+# Set when a default-key self-heal write has failed on this filesystem
+# (read-only / lockless install). Reads then merge defaults in memory
+# without retrying the write on every auth read; a restart re-tries once.
+_defaults_persist_broken = False
+
+
 def _load() -> dict:
     """Load config.json, creating it from env/defaults if missing."""
+    global _defaults_persist_broken
     path = _config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -120,14 +132,44 @@ def _load() -> dict:
         # Remove deprecated keys
         for old_key in ("output_dir", "scan_mode", "nudenet_enabled"):
             data.pop(old_key, None)
-        # Fill in any new keys
-        changed = False
-        for k, v in _DEFAULTS.items():
-            if k not in data:
-                data[k] = v
-                changed = True
-        if changed:
-            save(data)
+        # Fill in any new keys: a LOCKED read-modify-write that merges only
+        # the defaults STILL MISSING from the freshly-read locked state, so
+        # a concurrent config update can never be lost to a stale
+        # whole-file snapshot (the missing set is recomputed under the
+        # lock, never captured before it).
+        missing = {k: v for k, v in _DEFAULTS.items() if k not in data}
+        if missing:
+            import config_lock
+            if config_lock.held_by_current_thread():
+                # Re-entrant call from inside mutate(): the read above was
+                # made under the already-held lock, so writing this state
+                # back cannot lose a concurrent update.
+                data.update(missing)
+                _write(data)
+                _defaults_persist_broken = False
+            elif _defaults_persist_broken:
+                data.update(missing)
+            else:
+                try:
+                    def _apply_defaults(c):
+                        # setdefault semantics on the FRESH locked dict: a
+                        # writer that supplied the key while we waited for
+                        # the lock keeps its value.
+                        for k, v in _DEFAULTS.items():
+                            c.setdefault(k, v)
+                        return c
+                    data = config_lock.mutate(_apply_defaults)
+                    _defaults_persist_broken = False
+                except (config_lock.LockValidationError, OSError) as e:
+                    # Read-only or lockless install: keep serving (defaults
+                    # merged in memory) rather than failing every auth
+                    # read. Persistent writes are NOT bypassed — the
+                    # on-disk file stays as-is until BASE_DIR is writable
+                    # or the lock file is repaired.
+                    _defaults_persist_broken = True
+                    data.update(missing)
+                    log.warning("Could not persist default config keys "
+                                "(%s); merged in memory only.", e)
         return _apply_env_secrets(data)
 
     # First run — seed from env vars
@@ -166,12 +208,28 @@ def _load() -> dict:
         "auth_password_hash":    "",
         "auth_method":             "",
         "session_secret":          "",
+        "session_epoch":           0,
+        "remember_me_days":        30,
     }
-    save(cfg)
+    _bootstrap_save(cfg)
+    if os.path.exists(_config_path()):
+        # Another writer won the first-run race while we were seeding:
+        # return THEIR persisted config (epoch, credentials and all), not
+        # our losing first-run defaults. A winner we cannot READ is never
+        # answered with our never-persisted defaults: propagate the error
+        # (auth treats an unreadable config as epoch-unavailable and fails
+        # closed) instead of resurrecting losing credentials as if real.
+        with open(_config_path()) as f:
+            cfg = json.load(f)
     return _apply_env_secrets(cfg)
 
 
-def save(cfg: dict) -> None:
+def _write(cfg: dict) -> None:
+    """Plain atomic config.json write (tmp + os.replace + 0600).
+
+    Caller must either hold the config lock or be bootstrap. No epoch clamp:
+    that is save()'s job.
+    """
     path = _config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     for old_key in ("output_dir", "scan_mode", "nudenet_enabled"):
@@ -191,6 +249,65 @@ def save(cfg: dict) -> None:
                 pass
     # os.open mode is only honoured on creation; enforce on every write.
     _secure(path)
+
+
+def save(cfg: dict) -> None:
+    """Persist config.json under the cross-process config lock.
+
+    This is the ONLY write path (besides first-run _bootstrap_save): the
+    lock serialises read-modify-write cycles with credential changes /
+    session revocation, and ``session_epoch`` is clamped back up to the
+    on-disk value, so a stale snapshot can never roll the generation back
+    and revive revoked sessions. Re-entrant: safe to call from inside
+    config_lock.mutate().
+    """
+    import config_lock
+    with config_lock._FileLock():
+        _save_held(cfg)
+
+
+def _save_held(cfg: dict) -> None:
+    """Write cfg with the config lock already held by this thread.
+
+    Enforces the session_epoch monotonic clamp against the on-disk value.
+    """
+    disk_epoch = 0
+    try:
+        with open(_config_path(), "rb") as f:
+            disk_epoch = int(json.load(f).get("session_epoch") or 0)
+    except (OSError, ValueError):
+        pass  # no file yet / unreadable: this write is the recovery
+    try:
+        epoch = int(cfg.get("session_epoch") or 0)
+    except (TypeError, ValueError):
+        epoch = 0
+    if epoch < disk_epoch:
+        cfg["session_epoch"] = disk_epoch
+    _write(cfg)
+
+
+def _bootstrap_save(cfg: dict) -> None:
+    """First-run seeding ONLY (no config.json exists yet).
+
+    Runs under the config lock with absence rechecked there: two processes
+    racing to first-run-initialize can never overwrite a config another
+    writer has already created, and an existing config's epoch is never
+    replaced with first-run defaults.
+    """
+    import config_lock
+
+    if config_lock.held_by_current_thread():
+        # Re-entrant path (lock already held): recheck absence right here,
+        # then write. No unlocked window between check and write.
+        if os.path.exists(_config_path()):
+            return
+        _save_held(cfg)
+        return
+
+    with config_lock._FileLock():
+        if os.path.exists(_config_path()):
+            return  # another writer won the race; leave theirs in place
+        _save_held(cfg)
 
 
 def raw() -> dict:

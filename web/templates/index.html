@@ -448,6 +448,13 @@
           </section>
 
           <section class="config-section">
+            <h2>Sessions</h2>
+            <p class="hint">Signs out every other browser and device, including ones set to 'Remember me'. This device stays signed in. Changing the password or token also signs out all devices.</p>
+            <button class="btn btn-secondary" onclick="revokeOtherSessions()">Sign out other devices</button>
+            <div id="sessions-result" class="test-result" style="margin-top:8px"></div>
+          </section>
+
+          <section class="config-section">
             <h2>Database</h2>
             <p class="hint">Clean Database removes records for files that no longer exist on disk or are outside your watch folders.</p>
             <button class="btn btn-secondary" onclick="cleanDatabase()">🧹 Clean Database</button>

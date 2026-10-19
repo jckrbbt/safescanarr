@@ -58,6 +58,21 @@ def api_get(url: str, api_key: str):
         return None
 
 
+def _last_seen_id(db: Database, key: str):
+    """Stored numeric cursor, or None if absent/unparseable. Defensive:
+    a foreign stored value (e.g. restored TEXT 'unavailable') must
+    degrade to 'treat everything as new', never crash the poll loop."""
+    raw = db.get_poller_state(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log.warning("[%s] unparseable stored cursor %r; resynchronizing "
+                    "from the current history window", key, raw)
+        return None
+
+
 def poll_sonarr(db: Database) -> None:
     cfg = Config()
     if not cfg.SONARR_API_KEY:
@@ -70,7 +85,7 @@ def poll_sonarr(db: Database) -> None:
         return
 
     records      = data.get("records", [])
-    last_seen_id = db.get_poller_state("sonarr_last_id")
+    last_seen_id = _last_seen_id(db, "sonarr_last_id")
     new_last_id  = None
     processed    = 0
 
@@ -84,7 +99,7 @@ def poll_sonarr(db: Database) -> None:
         if new_last_id is None or record_id > new_last_id:
             new_last_id = record_id
 
-        if last_seen_id and record_id <= int(last_seen_id):
+        if last_seen_id and record_id <= last_seen_id:
             break
 
         if not is_in_watched_folder(file_path, cfg):
@@ -113,7 +128,7 @@ def poll_radarr(db: Database) -> None:
         return
 
     records      = data.get("records", [])
-    last_seen_id = db.get_poller_state("radarr_last_id")
+    last_seen_id = _last_seen_id(db, "radarr_last_id")
     new_last_id  = None
     processed    = 0
 
@@ -127,7 +142,7 @@ def poll_radarr(db: Database) -> None:
         if new_last_id is None or record_id > new_last_id:
             new_last_id = record_id
 
-        if last_seen_id and record_id <= int(last_seen_id):
+        if last_seen_id and record_id <= last_seen_id:
             break
 
         if not is_in_watched_folder(file_path, cfg):

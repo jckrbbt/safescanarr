@@ -1,4 +1,4 @@
-/* ── Safe Scanarr v1.0.10 ──────────────────────────────────────── */
+/* ── Safe Scanarr v1.0.11 ──────────────────────────────────────── */
 
 const TABS     = ["pending", "approved", "quarantined", "rejected"];
 let currentTab = "pending";
@@ -54,7 +54,27 @@ async function apiFetch(url, opts) {
 }
 
 async function signOut() {
-  try { await apiFetch("/logout", {method: "POST", headers: {"X-CSRF-Token": csrfToken()}}); } catch(e) {}
+  var res;
+  try {
+    res = await apiFetch("/logout", {method: "POST", headers: {"X-CSRF-Token": csrfToken()}});
+  } catch(e) {
+    // Network-level failure: session state unknown; treat like a failed
+    // sign-out too — show the error and let the user retry.
+    toast("Sign-out failed — please try again.", true);
+    return;
+  }
+  if (!res.ok) {
+    // Server refused the sign-out (remembered row not revoked). Do NOT
+    // redirect: the session is still authenticated server-side, and the
+    // user must see the failure and retry.
+    var msg = "Sign-out failed — please try again.";
+    try {
+      var body = await res.json();
+      if (body && body.message) msg = body.message;
+    } catch(e) {}
+    toast(msg, true);
+    return;
+  }
   redirectToLogin();
 }
 
@@ -1195,6 +1215,24 @@ async function cleanDatabase() {
 }
 
 // ── Backup / restore ─────────────────────────────────────────────
+async function revokeOtherSessions() {
+  if (!confirm("Sign out all other devices?")) return;
+  var result = document.getElementById("sessions-result");
+  result.className = "test-result";
+  result.textContent = "Signing out…";
+  try {
+    var res  = await apiFetch("/api/auth/revoke-sessions", {method:"POST"});
+    var data = await res.json();
+    result.className = res.ok ? "test-result success" : "test-result error";
+    result.textContent = res.ok
+      ? "✓ Signed out " + (data.revoked_remembered || 0) + " remembered device" + ((data.revoked_remembered || 0) === 1 ? "" : "s") + "; all other sessions ended"
+      : "✗ " + (data.message || "Failed");
+  } catch (err) {
+    result.className = "test-result error";
+    result.textContent = "✗ Failed";
+  }
+}
+
 async function restoreDatabase(file) {
   if (!file) return;
   if (!confirm("This will REPLACE the entire database. Continue?")) return;

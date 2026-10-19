@@ -20,6 +20,13 @@
                placeholder="Access token" autocomplete="current-password" autofocus>
         <button type="button" id="toggle-secret" class="toggle-secret" title="Show/hide">👁</button>
       </div>
+      {% if remember_days %}
+      <label class="checkbox-label login-remember">
+        <input type="checkbox" id="login-remember">
+        Remember me on this device for {{ remember_days }} days
+      </label>
+      <p class="login-remember-hint">Only use on devices you trust. Signing out forgets this device.</p>
+      {% endif %}
       <button type="submit" class="btn btn-primary login-submit" id="login-btn">Sign in</button>
     </form>
 
@@ -61,6 +68,8 @@
       try {
         var payload = isPassword ? {password: secret} : {token: secret};
         payload.secret = secret;  // server prefers 'secret'
+        var rem = document.getElementById("login-remember");
+        payload.remember = !!(rem && rem.checked);
         var res  = await fetch("/login", {
           method: "POST",
           headers: {"Content-Type": "application/json"},

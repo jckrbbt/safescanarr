@@ -1888,6 +1888,21 @@ textarea.input-full { resize: vertical; }
   line-height: 1;
 }
 
+.login-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: var(--space-3);
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.login-remember-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
 .password-hints {
   list-style: none;
   text-align: left;

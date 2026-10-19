@@ -56,7 +56,19 @@ Open **http://yourserver:8666** and complete the first-run setup to choose a pas
 Safe Scanarr supports two authentication methods, chosen during first-run setup:
 
 * **Password**: recommended for browser use. The password is hashed with `pbkdf2:sha256` and stored in `data/config.json`. It cannot be recovered, only reset.
-* **Security token**: recommended for scripts, API clients, and Docker. During setup the token is generated in your browser (never sent from the server) and displayed once with a copy button; it is stored exactly as shown, so what you save is what works. Use it via `X-Auth-Token: <token>` or `Authorization: Bearer <token>` on API calls.
+* **Security token**: recommended for scripts, API clients, and Docker. During setup the token is generated in your browser (never sent from the server) and displayed once with a copy button; it is stored exactly as shown, so what you save is what works. Use it via `X-Auth-Token` or `Authorization: Bearer` on API calls.
+
+### Staying signed in
+
+The login page offers a **Remember me on this device** checkbox. When checked, the session lasts 30 days from the moment you sign in (an absolute expiry — it is never extended by activity) and is backed by a server-side record, so remembered devices can be signed out remotely:
+
+- Signing out on the device forgets it.
+- Config → **Sign out other devices** signs out every other browser and device (including remembered ones) while keeping the current one signed in.
+- `python3 -m web.authtool revoke-sessions` signs out everything, including the device you run it from.
+- Changing the password or token, or resetting auth and running setup again, signs out all devices.
+- Restoring a database backup signs out every remembered device — including devices already present in the backup — except the restoring operator's own still-live session.
+
+The lifetime is controlled by `remember_me_days` in `data/config.json` (default 30; set it to `0` to disable the feature). It is config-file only — there is no environment override — and changes take effect after a restart. Only check "Remember me" on devices you trust, and serve Safe Scanarr over HTTPS, setting `SS_COOKIE_SECURE=1` so the session cookie is marked `Secure`.
 
 ### Environment overrides
 
@@ -74,11 +86,14 @@ python3 -m web.authtool status           # show current auth method and state (n
 python3 -m web.authtool reset            # return to first-run setup
 python3 -m web.authtool set-password     # prompts for a new password
 python3 -m web.authtool set-token --show # set a new token and print it
+python3 -m web.authtool revoke-sessions  # sign out all web sessions on every device
 ```
 
 ### Login throttling
 
 Failed login and setup attempts are throttled per IP address: 10 failures trigger a lockout with exponential backoff (1 minute doubling, capped at 1 hour). The lockout is keyed on the connecting IP as the server sees it. If multiple users access Safe Scanarr behind the same reverse proxy or NAT gateway, they all share one IP, so one person's failed attempts can lock everyone else out. Run Safe Scanarr directly on your LAN, or give each site a dedicated proxy, if that is a concern.
+
+Remembered ("Remember me") sessions are never throttled — the throttle only applies to login and setup attempts.
 
 **Note:** upgrading to 1.0.5 introduces an independent `session_secret`, which invalidates existing sessions once. You will be asked to sign in again.
 
@@ -90,7 +105,7 @@ Only two environment variables are required in `docker-compose.yml`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `BASE_DIR` | `/opt/safescanarr/data` | Where config, database, logs, and contact sheets are stored |
+| `BASE_DIR` | `/opt/safescanarr/data` | Where config, database, logs, and contact sheets are stored. **Trust boundary:** config and database locking is only as trustworthy as this directory — it must be owned by the SafeScanarr user and not writable by any other local account. |
 | `WEB_PORT` | `8666` | Web UI port |
 
 All other settings are managed from the Config page in the UI and saved to `./data/config.json`.

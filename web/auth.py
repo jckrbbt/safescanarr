@@ -28,6 +28,7 @@ from typing import Optional
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import config as config_module
+import config_lock
 
 log = logging.getLogger(__name__)
 
@@ -53,11 +54,23 @@ def _common_passwords_set() -> set:
     return _COMMON_PASSWORDS
 
 
+def _parse_epoch(value) -> int:
+    """session_epoch is int-like and non-negative; anything else is invalid."""
+    n = int(value or 0)
+    if n < 0:
+        raise ValueError("negative session_epoch")
+    return n
+
+
 class _AuthState:
     def __init__(self):
         self.method: str = ""  # '', 'token', or 'password'
         self.token_value: Optional[str] = None
         self.password_hash: Optional[str] = None
+        # Generation counter; None means "epoch unavailable" (unreadable
+        # config) — distinct from an explicit stored/default 0, and always
+        # fails closed (no fingerprint is issued).
+        self.epoch: Optional[int] = 0
         self.configured: bool = False
 
 
@@ -75,6 +88,13 @@ def _load_state() -> _AuthState:
         state.method = "token"
         state.token_value = env
         state.configured = True
+        try:
+            cfg = config_module.raw()
+            state.epoch = _parse_epoch(cfg.get("session_epoch"))
+        except (ValueError, TypeError):
+            state.epoch = None  # non-numeric epoch: unavailable, fail closed
+        except Exception:  # unreadable config (I/O, malformed JSON, ...)
+            state.epoch = None
         _auth_state = state
         return state
 
@@ -82,6 +102,10 @@ def _load_state() -> _AuthState:
     method = (cfg.get("auth_method") or "").strip()
     token = (cfg.get("auth_token") or "").strip()
     pwd_hash = (cfg.get("auth_password_hash") or "").strip()
+    try:
+        state.epoch = _parse_epoch(cfg.get("session_epoch"))
+    except (ValueError, TypeError):
+        state.epoch = None
 
     if method == "password" and pwd_hash:
         state.method = "password"
@@ -107,20 +131,47 @@ def _load_state() -> _AuthState:
 
 
 def _save_method(*, method: str, token: Optional[str] = None,
-                  password_hash: Optional[str] = None) -> None:
-    """Persist auth method and credentials to config.json (mode 0600)."""
-    cfg = config_module.raw()
-    cfg["auth_method"] = method
-    if method == "token":
-        cfg["auth_token"] = token or ""
-        cfg["auth_password_hash"] = ""
-    elif method == "password":
-        cfg["auth_token"] = ""
-        cfg["auth_password_hash"] = password_hash or ""
-    else:
-        cfg["auth_token"] = ""
-        cfg["auth_password_hash"] = ""
-    config_module.save(cfg)
+                  password_hash: Optional[str] = None,
+                  bump_epoch: bool = False) -> None:
+    """Persist auth method and credentials to config.json (mode 0600).
+
+    Every credential transition bumps the monotonic session_epoch under the
+    cross-process config lock, so returning to an earlier credential text
+    (token A→B→A, reset + same-token setup) can never resurrect old cookies.
+    """
+    def apply(cfg):
+        cfg["auth_method"] = method
+        if method == "token":
+            cfg["auth_token"] = token or ""
+            cfg["auth_password_hash"] = ""
+        elif method == "password":
+            cfg["auth_token"] = ""
+            cfg["auth_password_hash"] = password_hash or ""
+        else:
+            cfg["auth_token"] = ""
+            cfg["auth_password_hash"] = ""
+        if bump_epoch:
+            cfg["session_epoch"] = int(cfg.get("session_epoch") or 0) + 1
+    config_lock.mutate(apply)
+
+
+# Called (best effort) whenever a credential transition invalidates every
+# session, so remembered web_sessions rows are revoked alongside the epoch
+# bump. The web process and authtool each register their own.
+_revocation_hooks: list = []
+
+
+def register_revocation_hook(fn) -> None:
+    """Register a callable run after each credential-transition epoch bump."""
+    _revocation_hooks.append(fn)
+
+
+def _run_revocation_hooks() -> None:
+    for fn in list(_revocation_hooks):
+        try:
+            fn()
+        except Exception as e:
+            log.warning("Revocation hook %r failed: %s", fn, e)
 
 
 def is_configured() -> bool:
@@ -144,26 +195,45 @@ def token() -> str:
         return ""
 
 
-def verify(supplied: str) -> bool:
-    """Verify a supplied secret against the configured auth method."""
+def verify(supplied: str) -> Optional[int]:
+    """Verify a supplied secret against the configured auth method.
+
+    Returns the session generation (session_epoch) the credential was
+    verified against, or None on failure. Callers that establish a session
+    from the result must pass that generation to the fingerprint check so a
+    credential that was rotated away mid-request cannot mint a session
+    stamped with the new credential's fingerprint.
+    """
     if not supplied:
-        return False
+        return None
     with _LOCK:
-        state = _load_state()
+        try:
+            state = _load_state()
+        except Exception:  # unreadable config: fail closed
+            return None
         if state.method == "token":
             expected = state.token_value or ""
             if not expected:
-                return False
-            return hmac.compare_digest(str(supplied), expected)
+                return None
+            return state.epoch if hmac.compare_digest(str(supplied), expected) else None
         if state.method == "password":
             expected = state.password_hash or ""
             if not expected:
-                return False
+                return None
             try:
-                return check_password_hash(expected, str(supplied))
+                return state.epoch if check_password_hash(expected, str(supplied)) else None
             except Exception:  # pragma: no cover - malformed hash
-                return False
-        return False
+                return None
+        return None
+
+
+def generation() -> Optional[int]:
+    """Current session generation (epoch), or None if unavailable."""
+    with _LOCK:
+        try:
+            return _load_state().epoch
+        except Exception:  # unreadable config
+            return None
 
 
 def configure_password(pw: str, confirm: Optional[str] = None) -> None:
@@ -181,15 +251,17 @@ def configure_password(pw: str, confirm: Optional[str] = None) -> None:
         raise ValueError("Password must contain both lower and upper case letters.")
 
     h = generate_password_hash(pw, method=_HASH_METHOD)
-    _save_method(method="password", password_hash=h)
+    _save_method(method="password", password_hash=h, bump_epoch=True)
     _load_state()
+    _run_revocation_hooks()
 
 
 def configure_token(existing: Optional[str] = None) -> str:
     """Set token auth. Returns the configured token (existing or newly generated)."""
     t = existing.strip() if existing else secrets.token_urlsafe(32)
-    _save_method(method="token", token=t)
+    _save_method(method="token", token=t, bump_epoch=True)
     _load_state()
+    _run_revocation_hooks()
     return t
 
 
@@ -219,9 +291,14 @@ def configure_once(password=None, confirm=None, existing_token=None) -> str:
 
 
 def reset() -> None:
-    """Clear auth configuration, returning to first-run setup state."""
-    _save_method(method="", token="", password_hash="")
+    """Clear auth configuration, returning to first-run setup state.
+
+    Bumps the generation and revokes remembered rows too: a reset followed by
+    re-setup with the *same* credential text must still kill old cookies.
+    """
+    _save_method(method="", token="", password_hash="", bump_epoch=True)
     _load_state()
+    _run_revocation_hooks()
 
 
 def reset_cache() -> None:
@@ -229,3 +306,43 @@ def reset_cache() -> None:
     global _auth_state
     with _LOCK:
         _auth_state = _AuthState()
+
+
+def session_fingerprint(key: str, generation_value: Optional[int] = None) -> str:
+    """Bind every session to the current auth credential + session_epoch.
+
+    Returns "" when auth is not configured **or when the session epoch is
+    unavailable** (unreadable/unparseable config) — fail closed, never
+    substitute epoch 0. Any password/token change, a reset + re-setup, or a
+    session_epoch bump changes the fingerprint, which invalidates every
+    existing session cookie on the next request.
+
+    ``generation_value`` pins the epoch used for the fingerprint (used by
+    login: a credential verified at generation N must only produce a
+    fingerprint for N, not whatever generation is current later).
+    """
+    with _LOCK:
+        try:
+            state = _load_state()
+        except Exception:  # unreadable config: fail closed, no fingerprint
+            return ""
+        if not state.configured:
+            return ""
+        epoch = state.epoch if generation_value is None else generation_value
+        if epoch is None:
+            return ""  # epoch unavailable: fail closed, no fingerprint
+        method = state.method
+        credential = (state.token_value if method == "token"
+                      else state.password_hash) or ""
+        msg = f"v1|{method}|{credential}|{epoch}"
+        return hmac.new(key.encode(), msg.encode(), "sha256").hexdigest()[:32]
+
+
+def revoke_all_sessions() -> int:
+    """Bump session_epoch, signing out every device. Returns the new epoch."""
+    with _LOCK:
+        def apply(cfg):
+            cfg["session_epoch"] = int(cfg.get("session_epoch") or 0) + 1
+        cfg = config_lock.mutate(apply)
+        _load_state()
+        return int(cfg["session_epoch"])

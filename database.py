@@ -63,6 +63,17 @@ CREATE TABLE IF NOT EXISTS lifetime_stats (
 );
 """
 
+CREATE_WEB_SESSIONS = """
+CREATE TABLE IF NOT EXISTS web_sessions (
+    rid_hash     TEXT PRIMARY KEY,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    ip           TEXT,
+    user_agent   TEXT
+);
+"""
+
 # Migrations: columns added in v0.6
 MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN review_state TEXT NOT NULL DEFAULT 'pending'",
@@ -88,6 +99,7 @@ class Database:
         self._con.execute(CREATE_ERRORS)
         self._con.execute(CREATE_STATE)
         self._con.execute(CREATE_LIFETIME)
+        self._con.execute(CREATE_WEB_SESSIONS)
         self._run_migrations()
         # Migrate existing 'ok' records to 'approved'
         self._con.execute(
@@ -419,7 +431,14 @@ class Database:
 
     def get_scan_pid(self) -> Optional[int]:
         val = self.get_poller_state("scan_pid")
-        return int(val) if val else None
+        if not val:
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            # Unparseable stored value (e.g. restored from a foreign backup):
+            # treat as not-running rather than crashing the API consumer.
+            return None
 
     def get_poller_state(self, key: str) -> Optional[str]:
         cur = self._con.execute("SELECT value FROM state WHERE key = ?", (key,))
@@ -433,6 +452,59 @@ class Database:
             (key, value),
         )
         self._con.commit()
+
+    # ------------------------------------------------------------------
+    # Web sessions ("remember me" server-side revocation)
+    # ------------------------------------------------------------------
+
+    def create_web_session(self, rid_hash: str, expires_at: int,
+                           ip: Optional[str] = None,
+                           user_agent: Optional[str] = None) -> None:
+        now = int(datetime.now(timezone.utc).timestamp())
+        self._con.execute(
+            "INSERT OR REPLACE INTO web_sessions "
+            "(rid_hash, created_at, expires_at, last_used_at, ip, user_agent) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (rid_hash, now, int(expires_at), now, ip, (user_agent or "")[:200]),
+        )
+        self._con.commit()
+
+    def get_web_session(self, rid_hash: str) -> Optional[sqlite3.Row]:
+        cur = self._con.execute(
+            "SELECT * FROM web_sessions WHERE rid_hash = ?", (rid_hash,)
+        )
+        return cur.fetchone()
+
+    def touch_web_session(self, rid_hash: str, now: int) -> None:
+        self._con.execute(
+            "UPDATE web_sessions SET last_used_at = ? WHERE rid_hash = ?",
+            (int(now), rid_hash)
+        )
+        self._con.commit()
+
+    def delete_web_session(self, rid_hash: str) -> None:
+        self._con.execute(
+            "DELETE FROM web_sessions WHERE rid_hash = ?", (rid_hash,)
+        )
+        self._con.commit()
+
+    def delete_web_sessions_except(self, rid_hash: Optional[str]) -> int:
+        """Delete all remembered-session rows except rid_hash (may be None)."""
+        if rid_hash:
+            cur = self._con.execute(
+                "DELETE FROM web_sessions WHERE rid_hash != ?", (rid_hash,)
+            )
+        else:
+            cur = self._con.execute("DELETE FROM web_sessions")
+        self._con.commit()
+        return cur.rowcount
+
+    def purge_expired_web_sessions(self, now: int) -> int:
+        cur = self._con.execute(
+            "DELETE FROM web_sessions WHERE expires_at < ?", (int(now),)
+        )
+        self._con.commit()
+        return cur.rowcount
 
     def close(self) -> None:
         self._con.close()
